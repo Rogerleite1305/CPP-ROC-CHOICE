@@ -117,14 +117,9 @@ def calcular_pesos_roc(n_criterios):
 
 
 def obter_fatores_perfil(perfil_eixo1, perfil_eixo2):
-    """Define a simetria e dispersão da distribuição de incerteza do decisor
-
-    com base no perfil combinado selecionado.
-    """
     fator_inf = 0.90
     fator_sup = 1.10
 
-    # Ajuste por Eixo 1 (Inclinacao do Risco/Tendência)
     if perfil_eixo1 == "Otimista":
         fator_sup = 1.15
     elif perfil_eixo1 == "Pessimista":
@@ -134,13 +129,10 @@ def obter_fatores_perfil(perfil_eixo1, perfil_eixo2):
     elif perfil_eixo1 == "Racional":
         fator_inf, fator_sup = 0.95, 1.05
 
-    # Ajuste por Eixo 2 (Comportamento/Conservadorismo)
     if perfil_eixo2 == "Conservador":
         fator_inf = max(0.80, fator_inf - 0.05)
     elif perfil_eixo2 == "Agressivo":
         fator_sup = fator_sup + 0.05
-    elif perfil_eixo2 == "Moderado":
-        pass
 
     return fator_inf, fator_sup
 
@@ -159,11 +151,7 @@ def estimar_probabilidades_cpp_custom(
 
         for a in range(n_alt):
             c_val = valores[a]
-            a_min = (
-                max(0.0, c_val * fator_inf)
-                if c_val > 0
-                else 0.0
-            )
+            a_min = max(0.0, c_val * fator_inf) if c_val > 0 else 0.0
             b_max = (
                 min(val_max, c_val * fator_sup)
                 if c_val < val_max
@@ -558,7 +546,7 @@ def gerar_pdf_relatorio(
 
 
 # ==========================================
-# 4. INTERFACE STREAMLIT
+# 4. INTERFACE STREAMLIT COM ESTRUTURA EM ABAS (OPÇÃO 3)
 # ==========================================
 
 st.set_page_config(
@@ -628,87 +616,6 @@ if "emp_cnpj" not in st.session_state:
 if "calculo_executado" not in st.session_state:
     st.session_state["calculo_executado"] = False
 
-# BARRA LATERAL - CONFIGURAÇÕES DO PROBLEMA
-st.sidebar.markdown("### **Configuração do Problema**")
-n_dms = st.sidebar.number_input(
-    "Quantidade de Decisores (Permite mais de 2)",
-    min_value=1,
-    max_value=20,
-    value=2,
-    step=1,
-)
-n_alt = st.sidebar.number_input("Quantidade de Alternativas", 2, 20, 3)
-n_crit = st.sidebar.number_input("Quantidade de Critérios", 2, 10, 3)
-
-st.sidebar.markdown("#### **Escala de Avaliação**")
-tipo_escala = st.sidebar.selectbox(
-    "Escolha o intervalo da escala:",
-    [
-        "[0, 1] - Normalizada",
-        "[0, 10] - Notas de 0 a 10",
-        "[0, 100] - Porcentagem/Pontos",
-    ],
-    index=0,
-)
-
-if "[0, 10]" in tipo_escala:
-    val_max = 10.0
-    rotulo_matriz = "Matriz de Avaliação [0, 10]"
-elif "[0, 100]" in tipo_escala:
-    val_max = 100.0
-    rotulo_matriz = "Matriz de Avaliação [0, 100]"
-else:
-    val_max = 1.0
-    rotulo_matriz = "Matriz de Avaliação Normalizada [0, 1]"
-
-st.sidebar.markdown("#### **Nomes de Referência de Alternativas e Critérios**")
-nomes_alt_globais = [
-    st.sidebar.text_input(
-        f"Nome Alt. {a+1}", value=f"Alternativa {a+1}", key=f"glob_alt_{a}"
-    )
-    for a in range(n_alt)
-]
-nomes_crit_globais = [
-    st.sidebar.text_input(
-        f"Nome Crit. {c+1}", value=f"Critério {c+1}", key=f"glob_crit_{c}"
-    )
-    for c in range(n_crit)
-]
-
-st.sidebar.divider()
-
-with st.sidebar.expander(
-    "⚙️ Configurações Visuais e Cadastrais", expanded=False
-):
-    logo_file = st.file_uploader(
-        "Logo da Empresa (Rodapé e PDF)", type=["png", "jpg", "jpeg"], key="logo"
-    )
-
-    st.text_input(
-        "Nome da Empresa",
-        placeholder="Ex: Prefeitura de Maceió",
-        key="emp_nome",
-    )
-    st.text_input(
-        "CNPJ (Numérico ou Alfanumérico)",
-        placeholder="Digite 14 caracteres (ex: 12ABC345000199)",
-        key="emp_cnpj_input",
-        on_change=callback_atualizar_cnpj,
-    )
-    st.text_input("Contato", placeholder="E-mail / Telefone", key="emp_contato")
-    st.text_input(
-        "Link Oficial",
-        placeholder="instagram.com/rise.ufal",
-        key="emp_link",
-    )
-    st.text_input(
-        "CEP",
-        placeholder="Digite o CEP",
-        key="input_cep",
-        on_change=callback_atualizar_cep,
-    )
-    st.text_area("Endereço Completo", key="emp_end")
-
 # LOGO CENTRALIZADA
 col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
 with col_l2:
@@ -718,7 +625,7 @@ with col_l2:
     except Exception:
         st.warning("Não foi possível carregar a logo oficial do topo.")
 
-# CABEÇALHO ATUALIZADO
+# CABEÇALHO PRINCIPAL
 st.markdown(
     """
     <div class="main-header">
@@ -729,31 +636,127 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tab_app, tab_manual = st.tabs(["📊 Painel de Avaliação", "📖 Manual do Método"])
+# ORGANIZAÇÃO DAS ABAS DEDICADAS DO SISTEMA
+tab_config, tab_app, tab_manual = st.tabs(
+    [
+        "⚙️ 1. Configuração do Problema",
+        "📊 2. Avaliação dos Decisores & Resultados",
+        "📖 3. Manual do Método",
+    ]
+)
 
-with tab_manual:
-    st.markdown(
-        """
-    ### **MANUAL DO USUÁRIO — MÉTODO CPP-ROC CHOICE**
+# ----------------------------------------------------
+# ABA 1: CONFIGURAÇÃO DO PROBLEMA
+# ----------------------------------------------------
+with tab_config:
+    st.markdown("### **Configurações Gerais do Problema**")
+    st.caption("Ajuste as dimensões da tomada de decisão e cadastre os nomes de referência.")
 
-    O **CPP-ROC CHOICE** é um Sistema de Apoio à Decisão Multicritério (DSS) para a **problemática de escolha** sob incerteza.
+    col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
 
-    ---
+    with col_cfg1:
+        st.markdown("#### 👥 **Quantidade e Escala**")
+        n_dms = st.number_input(
+            "Quantidade de Decisores (DMs)",
+            min_value=1,
+            max_value=20,
+            value=2,
+            step=1,
+            key="cfg_n_dms",
+        )
+        n_alt = st.number_input(
+            "Quantidade de Alternativas", 2, 20, 3, key="cfg_n_alt"
+        )
+        n_crit = st.number_input(
+            "Quantidade de Critérios", 2, 10, 3, key="cfg_n_crit"
+        )
 
-    #### **1. Estrutura e Seleção do Perfil do Decisor**
+        tipo_escala = st.selectbox(
+            "Escolha o intervalo da escala:",
+            [
+                "[0, 1] - Normalizada",
+                "[0, 10] - Notas de 0 a 10",
+                "[0, 100] - Porcentagem/Pontos",
+            ],
+            index=0,
+            key="cfg_tipo_escala",
+        )
 
-    Cada decisor é caracterizado por um **Perfil Combinado em Dois Eixos**, que orienta como o motor estocástico avalia o grau de incerteza e apetite ao risco:
-    * **Eixo 1 (Tendência de Expectativa):** Otimista, Progressista, Neutro, Pessimista, Racional.
-    * **Eixo 2 (Comportamento Decisório):** Conservador, Moderado, Agressivo.
+        if "[0, 10]" in tipo_escala:
+            val_max = 10.0
+            rotulo_matriz = "Matriz de Avaliação [0, 10]"
+        elif "[0, 100]" in tipo_escala:
+            val_max = 100.0
+            rotulo_matriz = "Matriz de Avaliação [0, 100]"
+        else:
+            val_max = 1.0
+            rotulo_matriz = "Matriz de Avaliação Normalizada [0, 1]"
 
-    ---
+    with col_cfg2:
+        st.markdown("#### 🎯 **Nomes das Alternativas**")
+        nomes_alt_globais = [
+            st.text_input(
+                f"Nome Alt. {a+1}",
+                value=f"Alternativa {a+1}",
+                key=f"glob_alt_{a}",
+            )
+            for a in range(n_alt)
+        ]
 
-    #### **2. Métrica de Avaliação**
-    * **$M_i$ (M maiúsculo):** Probabilidade de a alternativa $i$ obter a excelência (melhor desempenho estocástico).
-    * **$m_i$ (m minúsculo):** Probabilidade de a alternativa $i$ apresentar o pior desempenho relativo.
-    """
-    )
+    with col_cfg3:
+        st.markdown("#### ⚖️ **Nomes dos Critérios**")
+        nomes_crit_globais = [
+            st.text_input(
+                f"Nome Crit. {c+1}",
+                value=f"Critério {c+1}",
+                key=f"glob_crit_{c}",
+            )
+            for c in range(n_crit)
+        ]
 
+    st.divider()
+
+    with st.expander("🏢 **Dados Cadastrais da Empresa e Logomarca (Opcional)**", expanded=False):
+        c_cad1, c_cad2 = st.columns(2)
+        with c_cad1:
+            logo_file = st.file_uploader(
+                "Logo da Empresa (Rodapé e PDF)",
+                type=["png", "jpg", "jpeg"],
+                key="logo",
+            )
+            st.text_input(
+                "Nome da Empresa",
+                placeholder="Ex: Prefeitura de Maceió",
+                key="emp_nome",
+            )
+            st.text_input(
+                "CNPJ (Numérico ou Alfanumérico)",
+                placeholder="Digite 14 caracteres (ex: 12ABC345000199)",
+                key="emp_cnpj_input",
+                on_change=callback_atualizar_cnpj,
+            )
+        with c_cad2:
+            st.text_input(
+                "Contato", placeholder="E-mail / Telefone", key="emp_contato"
+            )
+            st.text_input(
+                "Link Oficial",
+                placeholder="instagram.com/rise.ufal",
+                key="emp_link",
+            )
+            st.text_input(
+                "CEP",
+                placeholder="Digite o CEP",
+                key="input_cep",
+                on_change=callback_atualizar_cep,
+            )
+            st.text_area("Endereço Completo", key="emp_end")
+
+    st.success("✅ **Estrutura Configurada!** Clique na aba **'2. Avaliação dos Decisores & Resultados'** para preencher as notas.")
+
+# ----------------------------------------------------
+# ABA 2: AVALIAÇÃO DOS DECISORES & RESULTADOS
+# ----------------------------------------------------
 with tab_app:
     matrizes_dms = []
     ordens_dms = []
@@ -766,7 +769,6 @@ with tab_app:
 
     st.markdown("### **Painel de Avaliação dos Decisores**")
 
-    # CRIAÇÃO DAS ABAS DINÂMICAS PARA 'N' DECISORES
     abas_dms = st.tabs([f"👤 Decisor {d+1}" for d in range(n_dms)])
 
     opcoes_eixo_1 = [
@@ -782,7 +784,6 @@ with tab_app:
         with aba:
             col_id1, col_id2 = st.columns([1, 2])
             with col_id1:
-                # CAMPO PARA O DECISOR DIGITAR SEU PRÓPRIO NOME LIBERADO
                 nome_dm = st.text_input(
                     f"Identificação do Decisor {d+1}:",
                     value=f"Decisor {d+1}",
@@ -818,7 +819,6 @@ with tab_app:
 
             st.divider()
 
-            # ESTRUTURA VISUAL DE ALTERNATIVAS, CRITÉRIOS E PESOS ROC
             col1, col2 = st.columns([2, 1])
             with col1:
                 st.markdown(
@@ -870,7 +870,6 @@ with tab_app:
             alt_opt_max_nome = nomes_alt_globais[res["otima_max_Mi"]]
             alt_opt_min_nome = nomes_alt_globais[res["otima_min_mi"]]
 
-            # NOTAÇÃO SOLICITADA: Mi (Probabilidade de Excelência) e m_i (Probabilidade de Pior Desempenho)
             df_res = pd.DataFrame(
                 {
                     "Alternativa": nomes_alt_globais,
@@ -878,6 +877,8 @@ with tab_app:
                     "m_i (Probabilidade de Pior Desempenho)": res["m_i"],
                 }
             )
+
+            logo_uploaded = st.session_state.get("logo", None)
 
             pdf_bytes = gerar_pdf_relatorio(
                 df_res,
@@ -895,7 +896,7 @@ with tab_app:
                 st.session_state.get("cep_formatado", ""),
                 st.session_state.get("emp_end", ""),
                 st.session_state.get("emp_link", ""),
-                logo_file,
+                logo_uploaded,
             )
 
             st.session_state["res"] = res
@@ -906,7 +907,6 @@ with tab_app:
             st.session_state["nomes_dms_finais"] = nomes_dms_finais
             st.session_state["calculo_executado"] = True
 
-    # SEÇÃO DE EXIBIÇÃO DUPLA DAS RECOMENDAÇÕES (NA TELA E VIA RELATÓRIO)
     if st.session_state.get("calculo_executado", False):
         res = st.session_state["res"]
         df_res = st.session_state["df_res"]
@@ -918,7 +918,6 @@ with tab_app:
         st.markdown("---")
         st.markdown("### 🏆 **Resultado da Análise — Problemática de Escolha**")
 
-        # RECOMENDAÇÃO EM DESTAQUE NA TELA PARA OS DECISORES
         st.markdown(
             f"""
             <div class="recommendation-card">
@@ -1003,10 +1002,37 @@ with tab_app:
             mime="application/pdf",
         )
 
+# ----------------------------------------------------
+# ABA 3: MANUAL DO MÉTODO
+# ----------------------------------------------------
+with tab_manual:
+    st.markdown(
+        """
+    ### **MANUAL DO USUÁRIO — MÉTODO CPP-ROC CHOICE**
+
+    O **CPP-ROC CHOICE** é um Sistema de Apoio à Decisão Multicritério (DSS) focado na **problemática de escolha** sob condições de incerteza estocástica.
+
+    ---
+
+    #### **1. Fundamentação dos Perfis Decisórios em Dois Eixos**
+
+    Cada decisor possui uma percepção diferente sobre o risco. No sistema, a avaliação estocástica ajusta a distribuição triangular com base em 2 eixos:
+    * **Eixo 1 (Tendência/Expectativa):** Otimista, Progressista, Neutro, Pessimista e Racional.
+    * **Eixo 2 (Comportamento/Governança):** Conservador, Moderado e Agressivo.
+
+    ---
+
+    #### **2. Métrica de Avaliação**
+    * **$M_i$ (M maiúsculo):** Probabilidade de a alternativa $i$ obter o desempenho superior / excelência no cenário simulado.
+    * **$m_i$ (m minúsculo):** Probabilidade de a alternativa $i$ apresentar o pior desempenho relativo.
+    """
+    )
+
 # ==========================================
 # RODAPÉ: CARTÃO EMPRESA + DIREITOS AUTORAIS RISE-UFAL
 # ==========================================
-logo_b64 = imagem_para_base64(logo_file) if logo_file else None
+logo_uploaded = st.session_state.get("logo", None)
+logo_b64 = imagem_para_base64(logo_uploaded) if logo_uploaded else None
 emp_nome = st.session_state.get("emp_nome", "")
 emp_cnpj = st.session_state.get("emp_cnpj", "")
 emp_contato = st.session_state.get("emp_contato", "")
