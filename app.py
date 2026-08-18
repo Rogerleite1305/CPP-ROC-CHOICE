@@ -659,7 +659,7 @@ col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
 with col_l2:
     try:
         url_logo_github = "https://raw.githubusercontent.com/Rogerleite1305/CPP-ROC-CHOISE/main/LOGO%20CPP-ROC-CHOICE.png"
-        st.image(url_logo_github, width=100)  # Defina o tamanho em pixels desejado aqui
+        st.image(url_logo_github, width=150)  # Defina o tamanho em pixels desejado aqui
     except Exception:
         st.warning("Não foi possível carregar a logo oficial do topo.")
 
