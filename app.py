@@ -50,7 +50,6 @@ def imagem_para_base64(image_file, largura=44, altura=44):
 def formatar_cnpj(cnpj_raw):
     if not cnpj_raw:
         return ""
-    # Aceita caracteres alfanuméricos (letras e números) e converte para maiúsculo
     limpo = re.sub(r"[^a-zA-Z0-9]", "", str(cnpj_raw)).upper()
     if len(limpo) == 14:
         return (
@@ -627,10 +626,7 @@ with st.sidebar.expander(
     "⚙️ Configurações Visuais e Cadastrais", expanded=False
 ):
     logo_file = st.file_uploader(
-        "Logo da Empresa", type=["png", "jpg", "jpeg"], key="logo"
-    )
-    banner_file = st.file_uploader(
-        "Banner Superior", type=["png", "jpg", "jpeg"], key="banner"
+        "Logo da Empresa (Rodapé e PDF)", type=["png", "jpg", "jpeg"], key="logo"
     )
 
     st.text_input(
@@ -658,11 +654,14 @@ with st.sidebar.expander(
     )
     st.text_area("Endereço Completo", key="emp_end")
 
-# EXIBIÇÃO DO BANNER NO TOPO
-if banner_file:
-    st.image(
-        redimensionar_imagem(banner_file, 1200, 300), use_container_width=True
-    )
+# EXIBIÇÃO DA LOGO DO CPP-ROC CHOICE CENTRALIZADA NO TOPO DA PÁGINA
+col_l1, col_l2, col_l3 = st.columns([1, 3, 1])
+with col_l2:
+    try:
+        url_logo_github = "https://raw.githubusercontent.com/Rogerleite1305/CPP-ROC-CHOISE/main/LOGO%20CPP-ROC-CHOICE.png"
+        st.image(url_logo_github, use_container_width=True)
+    except Exception:
+        st.warning("Não foi possível carregar a logo oficial do topo.")
 
 st.markdown(
     """
@@ -924,12 +923,13 @@ card_empresa_footer_html = (
     f"</div>"
 )
 
-copyright_html = (
-    '<div class="copyright-footer">'
-    '© <a href="https://www.instagram.com/rise.ufal/" target="_blank">RISE-UFAL</a> — Resilient Infrastructure & Systems Engineering Lab | Universidade Federal de Alagoas.<br/>'
-    "Todos os direitos reservados. Sistema de Apoio à Decisão Multicritério (CPP-ROC CHOICE)."
-    "</div>"
-)
-
 st.markdown(card_empresa_footer_html, unsafe_allow_html=True)
-st.markdown(copyright_html, unsafe_allow_html=True)
+
+copyright_footer_html = """
+    <div class="copyright-footer">
+        © CPP-ROC CHOICE — Todos os direitos reservados.<br/>
+        Desenvolvido pelo Laboratório RISE/UFAL.
+    </div>
+"""
+
+st.markdown(copyright_footer_html, unsafe_allow_html=True)
