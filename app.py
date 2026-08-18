@@ -654,12 +654,12 @@ with st.sidebar.expander(
     )
     st.text_area("Endereço Completo", key="emp_end")
 
-# EXIBIÇÃO DA LOGO DO CPP-ROC CHOICE CENTRALIZADA NO TOPO DA PÁGINA
-col_l1, col_l2, col_l3 = st.columns([1, 3, 1])
+# EXIBIÇÃO DA LOGO DO CPP-ROC CHOICE CENTRALIZADA COM LARGURA FIXA
+col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
 with col_l2:
     try:
         url_logo_github = "https://raw.githubusercontent.com/Rogerleite1305/CPP-ROC-CHOISE/main/LOGO%20CPP-ROC-CHOICE.png"
-        st.image(url_logo_github, use_container_width=True)
+        st.image(url_logo_github, width=60)  # Defina o tamanho em pixels desejado aqui
     except Exception:
         st.warning("Não foi possível carregar a logo oficial do topo.")
 
@@ -923,13 +923,11 @@ card_empresa_footer_html = (
     f"</div>"
 )
 
-st.markdown(card_empresa_footer_html, unsafe_allow_html=True)
-
 copyright_footer_html = """
     <div class="copyright-footer">
-        © CPP-ROC CHOICE — Todos os direitos reservados.<br/>
-        Desenvolvido pelo Laboratório RISE/UFAL.
+        Desenvolvido pelo Laboratório de Pesquisa <b>RISE / UFAL</b> — Todos os direitos reservados.
     </div>
 """
 
+st.markdown(card_empresa_footer_html, unsafe_allow_html=True)
 st.markdown(copyright_footer_html, unsafe_allow_html=True)
