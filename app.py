@@ -654,7 +654,7 @@ with st.sidebar.expander(
     )
     st.text_area("Endereço Completo", key="emp_end")
 
-# EXIBIÇÃO DA LOGO DO CPP-ROC CHOICE CENTRALIZADA COM LARGURA FIXA
+# EXIBIÇÃO DA LOGO CENTRALIZADA COM LARGURA FIXA
 col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
 with col_l2:
     try:
@@ -663,7 +663,7 @@ with col_l2:
     except Exception:
         st.warning("Não foi possível carregar a logo oficial do topo.")
 
-# MODIFICAÇÃO 1: TÍTULO PRINCIPAL E SUBTÍTULO
+# TÍTULO PRINCIPAL E SUBTÍTULO
 st.markdown(
     """
     <div class="main-header">
@@ -735,7 +735,7 @@ with tab_app:
     matrizes_dms = []
     ordens_dms = []
 
-    # MODIFICAÇÃO 3: SINALIZAÇÃO DE ETAPAS
+    # SINALIZAÇÃO DE ETAPAS
     st.info("📌 **Fluxo de Avaliação em 3 Etapas:** Complete os passos abaixo para cada decisor antes de executar a análise.")
 
     col_e1, col_e2, col_e3 = st.columns(3)
@@ -749,7 +749,7 @@ with tab_app:
 
     for d, aba in enumerate(abas_dms):
         with aba:
-            # MODIFICAÇÃO 4: SELEÇÃO DE PERFIL DO DECISOR
+            # SELEÇÃO DE PERFIL DO DECISOR
             perfil_dm = st.selectbox(
                 f"Selecione o Perfil do {nomes_dms_globais[d]}:",
                 [
@@ -764,7 +764,7 @@ with tab_app:
             st.caption(f"Perfil selecionado: **{perfil_dm}**")
             st.divider()
 
-            # MODIFICAÇÃO 5: SINALIZAÇÃO CLARA DAS MATRIZES E PESOS ROC
+            # SINALIZAÇÃO CLARA DAS MATRIZES E PESOS ROC
             col1, col2 = st.columns([2, 1])
             with col1:
                 st.markdown("#### 📋 **Matriz de Avaliação**")
@@ -808,7 +808,7 @@ with tab_app:
             alt_opt_max_nome = nomes_alt_globais[res["otima_max_Mi"]]
             alt_opt_min_nome = nomes_alt_globais[res["otima_min_mi"]]
 
-            # MODIFICAÇÃO 2: NOTAÇÃO DAS PROBABILIDADES (Mi e m_i)
+            # NOTAÇÃO DAS PROBABILIDADES (Mi e m_i)
             df_res = pd.DataFrame(
                 {
                     "Alternativa": nomes_alt_globais,
