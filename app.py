@@ -33,20 +33,6 @@ def redimensionar_imagem(image_file, largura, altura):
     return img_res
 
 
-def imagem_para_base64(image_file, largura=44, altura=44):
-    try:
-        if hasattr(image_file, "getvalue"):
-            image_file = io.BytesIO(image_file.getvalue())
-        img_res = redimensionar_imagem(image_file, largura, altura)
-        buf = io.BytesIO()
-        img_res.save(buf, format="PNG")
-        buf.seek(0)
-        encoded = base64.b64encode(buf.read()).decode("utf-8")
-        return f"data:image/png;base64,{encoded}"
-    except Exception:
-        return None
-
-
 def formatar_cnpj(cnpj_raw):
     if not cnpj_raw:
         return ""
@@ -103,7 +89,7 @@ def callback_atualizar_cep():
 
 
 # ==========================================
-# 2. MOTOR MATEMÁTICO COM RASTREABILIDADE (CPP-ROC)
+# 2. MOTOR MATEMÁTICO CPP-ROC AJUSTADO (TABELA 2)
 # ==========================================
 
 
@@ -116,36 +102,14 @@ def calcular_pesos_roc(n_criterios):
     return pesos
 
 
-def obter_fatores_perfil(perfil_eixo1, perfil_eixo2):
-    fator_inf = 0.90
-    fator_sup = 1.10
-
-    if perfil_eixo1 == "Otimista":
-        fator_sup = 1.15
-    elif perfil_eixo1 == "Pessimista":
-        fator_inf = 0.85
-    elif perfil_eixo1 == "Progressista":
-        fator_sup = 1.20
-    elif perfil_eixo1 == "Racional":
-        fator_inf, fator_sup = 0.95, 1.05
-
-    if perfil_eixo2 == "Conservador":
-        fator_inf = max(0.80, fator_inf - 0.05)
-    elif perfil_eixo2 == "Agressivo":
-        fator_sup = fator_sup + 0.05
-    elif perfil_eixo2 == "Moderado":
-        pass
-
-    return fator_inf, fator_sup
-
-
 @st.cache_data(show_spinner=False)
-def estimar_probabilidades_cpp_custom(
-    matriz_avaliacoes, fator_inf, fator_sup, val_max=1.0, n_simulacoes=5000
+def estimar_probabilidades_cpp_base(
+    matriz_avaliacoes, val_max=1.0, n_simulacoes=5000
 ):
+    """Calcula as probabilidades elementares de cada alternativa sob incerteza."""
     n_alt, n_crit = matriz_avaliacoes.shape
-    M_ij = np.zeros((n_alt, n_crit))
-    m_ij = np.zeros((n_alt, n_crit))
+    P_max = np.zeros((n_alt, n_crit))
+    P_min = np.zeros((n_alt, n_crit))
 
     for c in range(n_crit):
         valores = matriz_avaliacoes[:, c]
@@ -153,16 +117,8 @@ def estimar_probabilidades_cpp_custom(
 
         for a in range(n_alt):
             c_val = valores[a]
-            a_min = (
-                max(0.0, c_val * fator_inf)
-                if c_val > 0
-                else 0.0
-            )
-            b_max = (
-                min(val_max, c_val * fator_sup)
-                if c_val < val_max
-                else val_max
-            )
+            a_min = max(0.0, c_val * 0.90) if c_val > 0 else 0.0
+            b_max = min(val_max, c_val * 1.10) if c_val < val_max else val_max
             if a_min == b_max:
                 b_max += 1e-5
             scale = b_max - a_min
@@ -175,10 +131,36 @@ def estimar_probabilidades_cpp_custom(
         pior_idx = np.argmin(amostras, axis=0)
 
         for a in range(n_alt):
-            M_ij[a, c] = np.sum(melhor_idx == a) / n_simulacoes
-            m_ij[a, c] = np.sum(pior_idx == a) / n_simulacoes
+            P_max[a, c] = np.sum(melhor_idx == a) / n_simulacoes
+            P_min[a, c] = np.sum(pior_idx == a) / n_simulacoes
 
-    return M_ij, m_ij
+    return P_max, P_min
+
+
+def aplicar_perfil_cpp(P_max, P_min, perfil_eixo1, perfil_eixo2, pesos_crit):
+    """Aplica as regras dos perfis da Tabela 2 (Otimista/Pessimista & Progressista/Conservador)."""
+    n_alt, n_crit = P_max.shape
+    pontuacao = np.zeros(n_alt)
+
+    # Escolha do vetor base conforme Eixo 2 (Atitude)
+    if perfil_eixo2 == "Progressista (Progressive)":
+        matriz_base = P_max  # Foco na maximização do desempenho
+    else:
+        matriz_base = 1.0 - P_min  # Conservador: Evitação do pior desempenho
+
+    # Ponderação pelos pesos ROC
+    matriz_ponderada = matriz_base * pesos_crit
+
+    # Composição conforme Eixo 1 (Perspectiva)
+    for a in range(n_alt):
+        if perfil_eixo1 == "Otimista (Optimistic)":
+            # Conectivo "OU" (União probabilística aproximada)
+            pontuacao[a] = 1.0 - np.prod(1.0 - matriz_ponderada[a, :])
+        else:
+            # Pessimista (Pessimistic): Conectivo "E" (Interseção probabilística)
+            pontuacao[a] = np.prod(matriz_ponderada[a, :])
+
+    return pontuacao
 
 
 def executar_cpp_roc_choice(
@@ -189,7 +171,6 @@ def executar_cpp_roc_choice(
 
     M_agregado = np.zeros(n_alt)
     m_agregado = np.zeros(n_alt)
-
     detalhes_dms = []
 
     for d in range(n_dms):
@@ -197,22 +178,21 @@ def executar_cpp_roc_choice(
         ordem = ordens_criterios_dms[d]
         eixo1, eixo2 = perfis_dms[d]
 
-        fator_inf, fator_sup = obter_fatores_perfil(eixo1, eixo2)
-
         pesos_roc_base = calcular_pesos_roc(n_crit)
         pesos_ordenados = np.zeros(n_crit)
         for rank, crit_idx in enumerate(ordem):
             pesos_ordenados[crit_idx] = pesos_roc_base[rank]
 
-        M_ij, m_ij = estimar_probabilidades_cpp_custom(
-            matriz, fator_inf, fator_sup, val_max=val_max
+        P_max, P_min = estimar_probabilidades_cpp_base(matriz, val_max=val_max)
+
+        # Cálculo da pontuação sob a ótica do perfil do decisor
+        score_dm = aplicar_perfil_cpp(
+            P_max, P_min, eixo1, eixo2, pesos_ordenados
         )
 
-        M_dm_contribuicao = np.zeros(n_alt)
-        m_dm_contribuicao = np.zeros(n_alt)
-        for a in range(n_alt):
-            M_dm_contribuicao[a] = np.sum(pesos_ordenados * M_ij[a, :])
-            m_dm_contribuicao[a] = np.sum(pesos_ordenados * m_ij[a, :])
+        # Para fins de análise final de dominância
+        M_dm_contribuicao = np.sum(P_max * pesos_ordenados, axis=1)
+        m_dm_contribuicao = np.sum(P_min * pesos_ordenados, axis=1)
 
         M_agregado += M_dm_contribuicao
         m_agregado += m_dm_contribuicao
@@ -220,12 +200,9 @@ def executar_cpp_roc_choice(
         detalhes_dms.append(
             {
                 "decisor": d + 1,
-                "perfil": f"{eixo1} - {eixo2}",
+                "perfil": f"{eixo1} | {eixo2}",
                 "pesos_criterios": pesos_ordenados,
-                "M_ij": M_ij,
-                "m_ij": m_ij,
-                "M_contribuicao": M_dm_contribuicao,
-                "m_contribuicao": m_dm_contribuicao,
+                "score_especifico": score_dm,
             }
         )
 
@@ -357,7 +334,7 @@ def gerar_pdf_relatorio(
     )
     elements.append(
         Paragraph(
-            "SISTEMA CPP-ROC CHOICE | PARA A PROBLEMÁTICA DE ESCOLHA SOB INCERTEZA",
+            "SISTEMA CPP-ROC CHOICE | ADAPTADO DE DECISION PROFILES (TABELA 2)",
             subtitle_style,
         )
     )
@@ -568,38 +545,6 @@ st.markdown(
     .main-header p { color: #94a3b8; font-size: 13px; margin-top: 4px; margin-bottom: 0; }
     .stButton>button { background-color: #2563eb !important; color: white !important; font-weight: 600 !important; border-radius: 6px !important; border: none !important; width: 100%; }
     
-    .company-card {
-        background-color: #ffffff;
-        border-left: 4px solid #2563eb;
-        padding: 16px;
-        border-radius: 8px;
-        margin-top: 30px;
-        margin-bottom: 15px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.04);
-        display: flex;
-        align-items: center;
-        gap: 16px;
-    }
-    .company-logo-img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid #e2e8f0; }
-    .company-info-container { flex-grow: 1; }
-    .company-header-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-    .company-link-btn {
-        background-color: #eff6ff; color: #2563eb !important; padding: 3px 10px; border-radius: 16px;
-        font-size: 11px; font-weight: 600; text-decoration: none !important; border: 1px solid #bfdbfe;
-    }
-    .company-details-text { margin: 4px 0 0 0; color: #475569; font-size: 12px; line-height: 1.4; }
-    
-    .copyright-footer { 
-        background-color: #0f172a; 
-        color: #94a3b8; 
-        text-align: center; 
-        padding: 12px; 
-        border-radius: 8px; 
-        font-size: 12px; 
-        margin-top: 10px; 
-    }
-    .copyright-footer a { color: #60a5fa; text-decoration: none; font-weight: bold; }
-    
     .recommendation-card {
         background-color: #f0fdf4;
         border: 1px solid #bbf7d0;
@@ -622,10 +567,7 @@ if "emp_cnpj" not in st.session_state:
 if "calculo_executado" not in st.session_state:
     st.session_state["calculo_executado"] = False
 
-# ==========================================
-# BARRA LATERAL (SIDEBAR) - DESIGN CORPORATIVO & ERGONÔMICO
-# ==========================================
-
+# BARRA LATERAL (SIDEBAR)
 st.sidebar.markdown(
     """
     <div style="padding-bottom: 10px;">
@@ -636,12 +578,7 @@ st.sidebar.markdown(
     unsafe_allow_html=True,
 )
 
-# 1. ESTRUTURA DO PROBLEMA & ESCALA (Expander aberto por padrão para acesso rápido)
-with st.sidebar.expander("📐 Estrutura & Escala do Problema", expanded=True):
-    st.markdown(
-        "<span style='font-size: 12px; font-weight: 600; color: #334155;'>Dimensões do Problema</span>",
-        unsafe_allow_html=True,
-    )
+with st.sidebar.expander("Estrutura & Escala do Problema", expanded=True):
     col_d1, col_d2 = st.columns(2)
     with col_d1:
         n_dms = st.number_input(
@@ -670,10 +607,6 @@ with st.sidebar.expander("📐 Estrutura & Escala do Problema", expanded=True):
 
     st.markdown("---")
 
-    st.markdown(
-        "<span style='font-size: 12px; font-weight: 600; color: #334155;'>Intervalo de Avaliação</span>",
-        unsafe_allow_html=True,
-    )
     tipo_escala = st.selectbox(
         "Escala:",
         [
@@ -683,7 +616,6 @@ with st.sidebar.expander("📐 Estrutura & Escala do Problema", expanded=True):
         ],
         index=0,
         key="cfg_tipo_escala",
-        label_visibility="collapsed",
     )
 
     if "[0, 10]" in tipo_escala:
@@ -696,8 +628,7 @@ with st.sidebar.expander("📐 Estrutura & Escala do Problema", expanded=True):
         val_max = 1.0
         rotulo_matriz = "Matriz de Avaliação Normalizada [0, 1]"
 
-# 2. NOMES DE REFERÊNCIA (Recolhido por padrão)
-with st.sidebar.expander("🏷️ Rotulagem (Alternativas e Critérios)", expanded=False):
+with st.sidebar.expander("Rotulagem (Alternativas e Critérios)", expanded=False):
     st.markdown("**Alternativas**")
     nomes_alt_globais = [
         st.text_input(
@@ -719,8 +650,7 @@ with st.sidebar.expander("🏷️ Rotulagem (Alternativas e Critérios)", expand
         for c in range(n_crit)
     ]
 
-# 3. IDENTIDADE CORPORATIVA (Recolhido por padrão)
-with st.sidebar.expander("🏢 Identidade Corporativa", expanded=False):
+with st.sidebar.expander("Identidade Corporativa", expanded=False):
     logo_file = st.file_uploader(
         "Logomarca do Cliente", type=["png", "jpg", "jpeg"], key="logo"
     )
@@ -761,7 +691,6 @@ with col_l2:
     except Exception:
         st.warning("Não foi possível carregar a logo oficial do topo.")
 
-# CABEÇALHO ATUALIZADO
 st.markdown(
     """
     <div class="main-header">
@@ -772,28 +701,25 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tab_app, tab_manual = st.tabs(["📊 Painel de Avaliação", "📖 Manual do Método"])
+tab_app, tab_manual = st.tabs(["Painel de Avaliação", "Manual dos Perfis"])
 
 with tab_manual:
     st.markdown(
         """
-    ### **MANUAL DO USUÁRIO — MÉTODO CPP-ROC CHOICE**
+    ### **PERFIS DECISÓRIOS (TABELA 2 DO ARTIGO DE REFERÊNCIA)**
 
-    O **CPP-ROC CHOICE** é um Sistema de Apoio à Decisão Multicritério (DSS) para a **problemática de escolha** sob incerteza.
+    Cada decisor deve ter seu perfil composto por **uma escolha de cada coluna**:
 
-    ---
-
-    #### **1. Estrutura e Seleção do Perfil do Decisor**
-
-    Cada decisor é caracterizado por um **Perfil Combinado em Dois Eixos**, que orienta como o motor estocástico avalia o grau de incerteza e apetite ao risco:
-    * **Eixo 1 (Tendência de Expectativa):** Otimista, Progressista, Neutro, Pessimista, Racional.
-    * **Eixo 2 (Comportamento Decisório):** Conservador, Moderado, Agressivo.
+    | Coluna 1: Perspectiva de Composição | Coluna 2: Atitude Perante o Risco |
+    | :--- | :--- |
+    | **Otimista (Optimistic):** Considera satisfatório otimizar pelo menos um critério (Conectivo "OU"). | **Progressista (Progressive):** Focado na maximização de preferências e altos padrões de excelência. |
+    | **Pessimista (Pessimistic):** Busca otimizações simultâneas em todos os critérios (Conectivo "E"). | **Conservador (Conservative):** Focado em evitar perdas extremas e maus desempenhos. |
 
     ---
 
-    #### **2. Métrica de Avaliação**
-    * **$M_i$ (M maiúsculo):** Probabilidade de a alternativa $i$ obter a excelência (melhor desempenho estocástico).
-    * **$m_i$ (m minúsculo):** Probabilidade de a alternativa $i$ apresentar o pior desempenho relativo.
+    #### **Como os Perfis Impactam o Cálculo:**
+    1. **Decisor Otimista-Progressista:** Otimiza pelo conectivo *OU* visando alcançar o melhor desempenho máximo.
+    2. **Decisor Pessimista-Conservador:** Exige cumprimento via conectivo *E* focando na evitação de riscos/falhas em todos os critérios.
     """
     )
 
@@ -804,22 +730,16 @@ with tab_app:
     nomes_dms_finais = []
 
     st.info(
-        "📌 **Fluxo de Entrada:** Preencha os dados dos decisores nas abas abaixo. O nome de cada decisor pode ser editado livremente."
+        "Selecione um perfil de cada coluna da Tabela 2 para associar a cada decisor."
     )
 
     st.markdown("### **Painel de Avaliação dos Decisores**")
 
-    # CRIAÇÃO DAS ABAS DINÂMICAS PARA 'N' DECISORES
-    abas_dms = st.tabs([f"👤 Decisor {d+1}" for d in range(n_dms)])
+    abas_dms = st.tabs([f"Decisor {d+1}" for d in range(n_dms)])
 
-    opcoes_eixo_1 = [
-        "Otimista",
-        "Progressista",
-        "Neutro",
-        "Racional",
-        "Pessimista",
-    ]
-    opcoes_eixo_2 = ["Conservador", "Moderado", "Agressivo"]
+    # OPCÕES EXATAS CONFORME A TABELA 2 ENVIADA NA IMAGEM
+    opcoes_eixo_1 = ["Otimista (Optimistic)", "Pessimista (Pessimistic)"]
+    opcoes_eixo_2 = ["Progressista (Progressive)", "Conservador (Conservative)"]
 
     for d, aba in enumerate(abas_dms):
         with aba:
@@ -832,42 +752,37 @@ with tab_app:
                 )
                 nomes_dms_finais.append(nome_dm)
 
-            st.markdown(f"#### 🎯 **Perfil Estratégico do {nome_dm}**")
-            st.caption(
-                "Selecione uma opção em cada coluna para formar a combinação comportamental:"
+            st.markdown(
+                f"#### **Perfil do Decisor (Tabela 2) — {nome_dm}**"
             )
 
             col_p1, col_p2 = st.columns(2)
             with col_p1:
                 perfil_1 = st.selectbox(
-                    f"Eixo 1 (Tendência) - {nome_dm}:",
+                    "Coluna 1 (Perspectiva de Composição):",
                     opcoes_eixo_1,
                     index=0 if d % 2 == 0 else 1,
                     key=f"dm_perfil_e1_{d}",
                 )
             with col_p2:
                 perfil_2 = st.selectbox(
-                    f"Eixo 2 (Comportamento) - {nome_dm}:",
+                    "Coluna 2 (Atitude de Risco):",
                     opcoes_eixo_2,
-                    index=0,
+                    index=0 if d % 2 == 0 else 1,
                     key=f"dm_perfil_e2_{d}",
                 )
 
             perfis_dms.append((perfil_1, perfil_2))
             st.caption(
-                f"Perfil ativo para cálculo: **{perfil_1} - {perfil_2}**"
+                f"Perfil Ativo: **{perfil_1}** + **{perfil_2}**"
             )
 
             st.divider()
 
-            # ESTRUTURA VISUAL DE ALTERNATIVAS, CRITÉRIOS E PESOS ROC
             col1, col2 = st.columns([2, 1])
             with col1:
                 st.markdown(
-                    f"#### 📋 **Sinalização: Avaliação de Alternativas por Critérios**"
-                )
-                st.caption(
-                    f"Preencha as notas para cada **Alternativa** (Linhas) nos **Critérios** (Colunas):"
+                    f"#### **Sinalização: Avaliação de Alternativas por Critérios**"
                 )
                 st.caption(rotulo_matriz)
                 valores_iniciais = np.round(
@@ -882,7 +797,7 @@ with tab_app:
                 matrizes_dms.append(df_editada.values)
 
             with col2:
-                st.markdown("#### ⚖️ **Sinalização: Pesos ROC (Critérios)**")
+                st.markdown("#### **Sinalização: Pesos ROC (Critérios)**")
                 st.caption(
                     "Defina a ordem de prioridade dos **Critérios** (1º = Mais importante):"
                 )
@@ -947,7 +862,6 @@ with tab_app:
             st.session_state["nomes_dms_finais"] = nomes_dms_finais
             st.session_state["calculo_executado"] = True
 
-    # SEÇÃO DE EXIBIÇÃO DUPLA DAS RECOMENDAÇÕES
     if st.session_state.get("calculo_executado", False):
         res = st.session_state["res"]
         df_res = st.session_state["df_res"]
@@ -957,12 +871,12 @@ with tab_app:
         nomes_dms_finais = st.session_state["nomes_dms_finais"]
 
         st.markdown("---")
-        st.markdown("### 🏆 **Resultado da Análise — Problemática de Escolha**")
+        st.markdown("### **Resultado da Análise — Problemática de Escolha**")
 
         st.markdown(
             f"""
             <div class="recommendation-card">
-                <h4 style="margin: 0; color: #15803d;">💡 Recomendação Final para Tomada de Decisão:</h4>
+                <h4 style="margin: 0; color: #15803d;">Recomendação Final para Tomada de Decisão:</h4>
                 <p style="margin: 5px 0 0 0; color: #166534; font-size: 14px;">
                     • Para o objetivo de <b>Liderança / Excelência (argmax $M_i$)</b>: A alternativa recomendada é <b>{alt_opt_max_nome}</b>.<br/>
                     • Para o objetivo de <b>Gerenciamento de Risco (argmin $m_i$)</b>: A alternativa mais segura é <b>{alt_opt_min_nome}</b>.
