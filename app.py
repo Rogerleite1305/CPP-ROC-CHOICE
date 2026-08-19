@@ -117,14 +117,9 @@ def calcular_pesos_roc(n_criterios):
 
 
 def obter_fatores_perfil(perfil_eixo1, perfil_eixo2):
-    """Define a simetria e dispersão da distribuição de incerteza do decisor
-
-    com base no perfil combinado selecionado.
-    """
     fator_inf = 0.90
     fator_sup = 1.10
 
-    # Ajuste por Eixo 1 (Inclinacao do Risco/Tendência)
     if perfil_eixo1 == "Otimista":
         fator_sup = 1.15
     elif perfil_eixo1 == "Pessimista":
@@ -134,7 +129,6 @@ def obter_fatores_perfil(perfil_eixo1, perfil_eixo2):
     elif perfil_eixo1 == "Racional":
         fator_inf, fator_sup = 0.95, 1.05
 
-    # Ajuste por Eixo 2 (Comportamento/Conservadorismo)
     if perfil_eixo2 == "Conservador":
         fator_inf = max(0.80, fator_inf - 0.05)
     elif perfil_eixo2 == "Agressivo":
@@ -628,86 +622,135 @@ if "emp_cnpj" not in st.session_state:
 if "calculo_executado" not in st.session_state:
     st.session_state["calculo_executado"] = False
 
-# BARRA LATERAL - CONFIGURAÇÕES DO PROBLEMA
-st.sidebar.markdown("### **Configuração do Problema**")
-n_dms = st.sidebar.number_input(
-    "Quantidade de Decisores (Permite mais de 2)",
-    min_value=1,
-    max_value=20,
-    value=2,
-    step=1,
-)
-n_alt = st.sidebar.number_input("Quantidade de Alternativas", 2, 20, 3)
-n_crit = st.sidebar.number_input("Quantidade de Critérios", 2, 10, 3)
+# ==========================================
+# BARRA LATERAL (SIDEBAR) - DESIGN CORPORATIVO & ERGONÔMICO
+# ==========================================
 
-st.sidebar.markdown("#### **Escala de Avaliação**")
-tipo_escala = st.sidebar.selectbox(
-    "Escolha o intervalo da escala:",
-    [
-        "[0, 1] - Normalizada",
-        "[0, 10] - Notas de 0 a 10",
-        "[0, 100] - Porcentagem/Pontos",
-    ],
-    index=0,
+st.sidebar.markdown(
+    """
+    <div style="padding-bottom: 10px;">
+        <h3 style="margin: 0; color: #0f172a; font-size: 18px;">⚙️ Configurações</h3>
+        <p style="margin: 0; color: #64748b; font-size: 11px;">Parâmetros de modelagem e ambiente</p>
+    </div>
+""",
+    unsafe_allow_html=True,
 )
 
-if "[0, 10]" in tipo_escala:
-    val_max = 10.0
-    rotulo_matriz = "Matriz de Avaliação [0, 10]"
-elif "[0, 100]" in tipo_escala:
-    val_max = 100.0
-    rotulo_matriz = "Matriz de Avaliação [0, 100]"
-else:
-    val_max = 1.0
-    rotulo_matriz = "Matriz de Avaliação Normalizada [0, 1]"
-
-st.sidebar.markdown("#### **Nomes de Referência de Alternativas e Critérios**")
-nomes_alt_globais = [
-    st.sidebar.text_input(
-        f"Nome Alt. {a+1}", value=f"Alternativa {a+1}", key=f"glob_alt_{a}"
+# 1. ESTRUTURA DO PROBLEMA & ESCALA (Expander aberto por padrão para acesso rápido)
+with st.sidebar.expander("📐 Estrutura & Escala do Problema", expanded=True):
+    st.markdown(
+        "<span style='font-size: 12px; font-weight: 600; color: #334155;'>Dimensões do Problema</span>",
+        unsafe_allow_html=True,
     )
-    for a in range(n_alt)
-]
-nomes_crit_globais = [
-    st.sidebar.text_input(
-        f"Nome Crit. {c+1}", value=f"Critério {c+1}", key=f"glob_crit_{c}"
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        n_dms = st.number_input(
+            "Nº Decisores",
+            min_value=1,
+            max_value=20,
+            value=2,
+            step=1,
+            key="cfg_n_dms",
+        )
+        n_crit = st.number_input(
+            "Nº Critérios",
+            min_value=2,
+            max_value=10,
+            value=3,
+            key="cfg_n_crit",
+        )
+    with col_d2:
+        n_alt = st.number_input(
+            "Nº Alternativas",
+            min_value=2,
+            max_value=20,
+            value=3,
+            key="cfg_n_alt",
+        )
+
+    st.markdown("---")
+
+    st.markdown(
+        "<span style='font-size: 12px; font-weight: 600; color: #334155;'>Intervalo de Avaliação</span>",
+        unsafe_allow_html=True,
     )
-    for c in range(n_crit)
-]
+    tipo_escala = st.selectbox(
+        "Escala:",
+        [
+            "[0, 1] - Normalizada",
+            "[0, 10] - Notas de 0 a 10",
+            "[0, 100] - Porcentagem/Pontos",
+        ],
+        index=0,
+        key="cfg_tipo_escala",
+        label_visibility="collapsed",
+    )
 
-st.sidebar.divider()
+    if "[0, 10]" in tipo_escala:
+        val_max = 10.0
+        rotulo_matriz = "Matriz de Avaliação [0, 10]"
+    elif "[0, 100]" in tipo_escala:
+        val_max = 100.0
+        rotulo_matriz = "Matriz de Avaliação [0, 100]"
+    else:
+        val_max = 1.0
+        rotulo_matriz = "Matriz de Avaliação Normalizada [0, 1]"
 
-with st.sidebar.expander(
-    "⚙️ Configurações Visuais e Cadastrais", expanded=False
-):
+# 2. NOMES DE REFERÊNCIA (Recolhido por padrão)
+with st.sidebar.expander("🏷️ Rotulagem (Alternativas e Critérios)", expanded=False):
+    st.markdown("**Alternativas**")
+    nomes_alt_globais = [
+        st.text_input(
+            f"Alt {a+1}",
+            value=f"Alternativa {a+1}",
+            key=f"glob_alt_{a}",
+        )
+        for a in range(n_alt)
+    ]
+
+    st.markdown("---")
+    st.markdown("**Critérios**")
+    nomes_crit_globais = [
+        st.text_input(
+            f"Crit {c+1}",
+            value=f"Critério {c+1}",
+            key=f"glob_crit_{c}",
+        )
+        for c in range(n_crit)
+    ]
+
+# 3. IDENTIDADE CORPORATIVA (Recolhido por padrão)
+with st.sidebar.expander("🏢 Identidade Corporativa", expanded=False):
     logo_file = st.file_uploader(
-        "Logo da Empresa (Rodapé e PDF)", type=["png", "jpg", "jpeg"], key="logo"
+        "Logomarca do Cliente", type=["png", "jpg", "jpeg"], key="logo"
     )
-
     st.text_input(
-        "Nome da Empresa",
-        placeholder="Ex: Prefeitura de Maceió",
+        "Empresa / Organização",
+        placeholder="Ex: RISE / UFAL",
         key="emp_nome",
     )
     st.text_input(
-        "CNPJ (Numérico ou Alfanumérico)",
-        placeholder="Digite 14 caracteres (ex: 12ABC345000199)",
+        "CNPJ",
+        placeholder="Apenas números ou formatado",
         key="emp_cnpj_input",
         on_change=callback_atualizar_cnpj,
     )
-    st.text_input("Contato", placeholder="E-mail / Telefone", key="emp_contato")
     st.text_input(
-        "Link Oficial",
+        "Contato / E-mail", placeholder="contato@empresa.com", key="emp_contato"
+    )
+    st.text_input(
+        "Website / Rede Social",
         placeholder="instagram.com/rise.ufal",
         key="emp_link",
     )
     st.text_input(
         "CEP",
-        placeholder="Digite o CEP",
+        placeholder="00000-000",
         key="input_cep",
         on_change=callback_atualizar_cep,
     )
-    st.text_area("Endereço Completo", key="emp_end")
+    st.text_area("Endereço", key="emp_end", height=70)
+
 
 # LOGO CENTRALIZADA
 col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
@@ -782,7 +825,6 @@ with tab_app:
         with aba:
             col_id1, col_id2 = st.columns([1, 2])
             with col_id1:
-                # CAMPO PARA O DECISOR DIGITAR SEU PRÓPRIO NOME LIBERADO
                 nome_dm = st.text_input(
                     f"Identificação do Decisor {d+1}:",
                     value=f"Decisor {d+1}",
@@ -870,7 +912,6 @@ with tab_app:
             alt_opt_max_nome = nomes_alt_globais[res["otima_max_Mi"]]
             alt_opt_min_nome = nomes_alt_globais[res["otima_min_mi"]]
 
-            # NOTAÇÃO SOLICITADA: Mi (Probabilidade de Excelência) e m_i (Probabilidade de Pior Desempenho)
             df_res = pd.DataFrame(
                 {
                     "Alternativa": nomes_alt_globais,
@@ -906,7 +947,7 @@ with tab_app:
             st.session_state["nomes_dms_finais"] = nomes_dms_finais
             st.session_state["calculo_executado"] = True
 
-    # SEÇÃO DE EXIBIÇÃO DUPLA DAS RECOMENDAÇÕES (NA TELA E VIA RELATÓRIO)
+    # SEÇÃO DE EXIBIÇÃO DUPLA DAS RECOMENDAÇÕES
     if st.session_state.get("calculo_executado", False):
         res = st.session_state["res"]
         df_res = st.session_state["df_res"]
@@ -918,7 +959,6 @@ with tab_app:
         st.markdown("---")
         st.markdown("### 🏆 **Resultado da Análise — Problemática de Escolha**")
 
-        # RECOMENDAÇÃO EM DESTAQUE NA TELA PARA OS DECISORES
         st.markdown(
             f"""
             <div class="recommendation-card">
@@ -960,95 +1000,10 @@ with tab_app:
         with st.expander(
             "🔍 Detalhamento por Decisor e Perfil Estratégico", expanded=True
         ):
-            st.markdown("#### **Perfis Atribuidos aos Decisores:**")
+            st.markdown("#### **Perfis Atribuídos aos Decisores:**")
             perfis_res = [
                 f"{det['decisor']} ({nomes_dms_finais[idx]}): {det['perfil']}"
                 for idx, det in enumerate(res["detalhes_dms"])
             ]
-            st.write(" | ".join(perfis_res))
-
-            st.markdown(
-                "#### **Pesos ROC Gerados por Decisor a partir da Ordenação:**"
-            )
-            data_roc = {"Critério": nomes_crit_globais}
-            for d in range(n_dms):
-                data_roc[f"Peso ({nomes_dms_finais[d]})"] = res[
-                    "detalhes_dms"
-                ][d]["pesos_criterios"]
-            st.dataframe(
-                pd.DataFrame(data_roc),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            st.markdown(
-                "#### **Contribuição Individual de cada Decisor ($M_i$):**"
-            )
-            dm_contrib_data = {"Alternativa": nomes_alt_globais}
-            for d in range(n_dms):
-                dm_contrib_data[f"Suporte {nomes_dms_finais[d]} ($M_i$)"] = res[
-                    "detalhes_dms"
-                ][d]["M_contribuicao"]
-            st.dataframe(
-                pd.DataFrame(dm_contrib_data),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        st.divider()
-        st.download_button(
-            label="📄 BAIXAR RELATÓRIO EXECUTIVO E MEMÓRIA DE CÁLCULO (PDF A4)",
-            data=pdf_bytes,
-            file_name="Relatorio_CPP_ROC_CHOICE.pdf",
-            mime="application/pdf",
-        )
-
-# ==========================================
-# RODAPÉ: CARTÃO EMPRESA + DIREITOS AUTORAIS RISE-UFAL
-# ==========================================
-logo_b64 = imagem_para_base64(logo_file) if logo_file else None
-emp_nome = st.session_state.get("emp_nome", "")
-emp_cnpj = st.session_state.get("emp_cnpj", "")
-emp_contato = st.session_state.get("emp_contato", "")
-emp_cep = st.session_state.get("cep_formatado", "")
-emp_end = st.session_state.get("emp_end", "")
-emp_link = st.session_state.get("emp_link", "")
-
-link_html = ""
-if emp_link:
-    url_formatada = (
-        emp_link if emp_link.startswith("http") else f"https://{emp_link}"
-    )
-    link_html = f'<a href="{url_formatada}" target="_blank" class="company-link-btn">Página Oficial / Rede Social</a>'
-
-logo_html = f'<img src="{logo_b64}" class="company-logo-img"/>' if logo_b64 else ""
-
-card_empresa_footer_html = (
-    f'<div class="company-card">'
-    f"{logo_html}"
-    f'<div class="company-info-container">'
-    f'<div class="company-header-title">'
-    f'<strong style="color: #0f172a; font-size: 15px;">{emp_nome if emp_nome else "Empresa Registrada"}</strong>'
-    f"{link_html}"
-    f"</div>"
-    f'<p class="company-details-text">'
-    f'<b>CNPJ:</b> {emp_cnpj if emp_cnpj else "Não informado"} &nbsp;|&nbsp; '
-    f'<b>Contato:</b> {emp_contato if emp_contato else "Não informado"}<br/>'
-    f'<b>CEP:</b> {emp_cep if emp_cep else "Não informado"} &nbsp;|&nbsp; '
-    f'<b>Endereço:</b> {emp_end if emp_end else "Não informado"}'
-    f"</p>"
-    f"</div>"
-    f"</div>"
-)
-
-st.markdown(card_empresa_footer_html, unsafe_allow_html=True)
-
-st.markdown(
-    """
-    <div class="copyright-footer">
-        © Desenvolvido pelo Grupo RISE / UFAL — Todos os direitos reservados. 
-        <br/><a href="https://instagram.com/rise.ufal" target="_blank">Siga o RISE no Instagram: @rise.ufal</a>
-    </div>
-""",
-    unsafe_allow_html=True,
-)
+            for p in perfis_res:
+                st.write(f"- {p}")
