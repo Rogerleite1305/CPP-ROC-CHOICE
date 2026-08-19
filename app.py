@@ -52,7 +52,6 @@ class NumberedCanvas(canvas.Canvas):
         self.setFont("Helvetica", 8)
         self.setFillColor(colors.HexColor("#475569"))
 
-        # Rodapé com data/hora e numeração
         data_hora = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         texto_rodape = (
             f"Relatório Gerado em: {data_hora} | Página {self._pageNumber} de {page_count}"
@@ -65,7 +64,6 @@ class NumberedCanvas(canvas.Canvas):
             "DSS CPP-ROC CHOICE — Desenvolvido por RISE/UFAL © Todos os direitos reservados",
         )
 
-        # Linha divisória do rodapé
         self.setStrokeColor(colors.HexColor("#cbd5e1"))
         self.setLineWidth(0.5)
         self.line(36, 32, A4[0] - 36, 32)
@@ -74,7 +72,7 @@ class NumberedCanvas(canvas.Canvas):
 
 
 # ==========================================
-# 1. FUNÇÕES AUXILIARES
+# 1. FUNÇÕES AUXILIARES E FORMATADORES
 # ==========================================
 
 
@@ -83,20 +81,6 @@ def redimensionar_imagem(image_file, largura, altura):
     resample_filter = getattr(Image, "Resampling", Image).LANCZOS
     img_res = img.resize((largura, altura), resample_filter)
     return img_res
-
-
-def imagem_para_base64(image_file, largura=44, altura=44):
-    try:
-        if hasattr(image_file, "getvalue"):
-            image_file = io.BytesIO(image_file.getvalue())
-        img_res = redimensionar_imagem(image_file, largura, altura)
-        buf = io.BytesIO()
-        img_res.save(buf, format="PNG")
-        buf.seek(0)
-        encoded = base64.b64encode(buf.read()).decode("utf-8")
-        return f"data:image/png;base64,{encoded}"
-    except Exception:
-        return None
 
 
 def formatar_cnpj(cnpj_raw):
@@ -155,7 +139,7 @@ def callback_atualizar_cep():
 
 
 # ==========================================
-# 2. MOTOR MATEMÁTICO COM NORMALIZAÇÃO & CUSTO
+# 2. MOTOR MATEMÁTICO (TABELA 2 DE PERFIS)
 # ==========================================
 
 
@@ -169,25 +153,27 @@ def calcular_pesos_roc(n_criterios):
 
 
 def obter_fatores_perfil(
-    perfil_eixo1, perfil_eixo2, pct_incerteza_base=0.10
+    perfil_col1, perfil_col2, pct_incerteza_base=0.10
 ):
+    """
+    Ajusta o suporte triangular de acordo com a Tabela 2 do artigo:
+    Coluna 1: Optimistic vs. Progressive
+    Coluna 2: Pessimistic vs. Conservative
+    """
     fator_inf = 1.0 - pct_incerteza_base
     fator_sup = 1.0 + pct_incerteza_base
 
-    if perfil_eixo1 == "Otimista":
-        fator_sup += 0.05
-    elif perfil_eixo1 == "Pessimista":
-        fator_inf -= 0.05
-    elif perfil_eixo1 == "Progressista":
-        fator_sup += 0.10
-    elif perfil_eixo1 == "Racional":
-        fator_inf = max(0.01, 1.0 - (pct_incerteza_base / 2))
-        fator_sup = 1.0 + (pct_incerteza_base / 2)
+    # Ajuste Coluna 1
+    if perfil_col1 == "Optimistic (Otimista)":
+        fator_sup += 0.08
+    elif perfil_col1 == "Progressive (Progressista)":
+        fator_sup += 0.12
 
-    if perfil_eixo2 == "Conservador":
+    # Ajuste Coluna 2
+    if perfil_col2 == "Pessimistic (Pessimista)":
+        fator_inf -= 0.08
+    elif perfil_col2 == "Conservative (Conservador)":
         fator_inf = max(0.01, fator_inf - 0.05)
-    elif perfil_eixo2 == "Agressivo":
-        fator_sup += 0.05
 
     return fator_inf, fator_sup
 
@@ -267,10 +253,10 @@ def executar_cpp_roc_choice(
         )
 
         ordem = ordens_criterios_dms[d]
-        eixo1, eixo2 = perfis_dms[d]
+        col1_perfil, col2_perfil = perfis_dms[d]
 
         fator_inf, fator_sup = obter_fatores_perfil(
-            eixo1, eixo2, pct_incerteza_base=pct_incerteza
+            col1_perfil, col2_perfil, pct_incerteza_base=pct_incerteza
         )
 
         pesos_roc_base = calcular_pesos_roc(n_crit)
@@ -297,7 +283,7 @@ def executar_cpp_roc_choice(
         detalhes_dms.append(
             {
                 "decisor": d + 1,
-                "perfil": f"{eixo1} - {eixo2}",
+                "perfil": f"{col1_perfil} - {col2_perfil}",
                 "pesos_criterios": pesos_ordenados,
                 "matriz_norm": matriz_norm,
                 "M_ij": M_ij,
@@ -332,16 +318,16 @@ def gerar_grafico_membro(df_resultados, para_impressao=False):
 
     ax.bar(
         x - largura / 2,
-        df_resultados["Mi (Probabilidade de Excelência)"],
+        df_resultados["M_i (Probabilidade de Excelência)"],
         largura,
-        label="Mi (Excelência / Dominância)",
+        label="M_i (Excelência / Dominância)",
         color="#2563eb",
     )
     ax.bar(
         x + largura / 2,
         df_resultados["m_i (Probabilidade de Pior Desempenho)"],
         largura,
-        label="mi (Pior Desempenho / Risco)",
+        label="m_i (Pior Desempenho / Risco)",
         color="#ef4444",
     )
 
@@ -364,7 +350,7 @@ def gerar_grafico_membro(df_resultados, para_impressao=False):
 
 
 # ==========================================
-# 3. GERADOR DE RELATÓRIO PDF A4 COM REPORTLAB
+# 3. GERADOR DE RELATÓRIO PDF A4
 # ==========================================
 
 
@@ -402,7 +388,7 @@ def gerar_pdf_relatorio(
     title_style = ParagraphStyle(
         "DocTitle",
         parent=styles["Heading1"],
-        fontSize=14,
+        fontSize=13,
         textColor=colors.HexColor("#0f172a"),
         spaceAfter=3,
     )
@@ -436,13 +422,12 @@ def gerar_pdf_relatorio(
         leading=10,
     )
 
-    # CABEÇALHO DO DOCUMENTO
     elements.append(
         Paragraph("RELATÓRIO EXECUTIVO DE TOMADA DE DECISÃO", title_style)
     )
     elements.append(
         Paragraph(
-            "SISTEMA CPP-ROC CHOICE | MODELAGEM MULTICRITÉRIO SOB INCERTEZA ESTOCÁSTICA",
+            "DECISION SUPPORT SYSTEM - CPP-ROC-CHOICE<br/>Sistema de Apoio à Decisão Multicritério com Múltiplos Decisores Sob Incerteza. Para a problemática de escolha.",
             subtitle_style,
         )
     )
@@ -455,8 +440,7 @@ def gerar_pdf_relatorio(
         )
     )
 
-    # 1. TABELA DE RECOMENDAÇÃO TÉCNICA
-    sorted_mi = np.sort(df_resultados["Mi (Probabilidade de Excelência)"])[
+    sorted_mi = np.sort(df_resultados["M_i (Probabilidade de Excelência)"])[
         ::-1
     ]
     margem_dominancia = (
@@ -466,17 +450,17 @@ def gerar_pdf_relatorio(
     rec_data = [
         ["Perfil Decisório", "Alternativa Ótima", "Métrica Agregada"],
         [
-            "Maximotimizador (argmax Mi)",
+            "Maximotimizador (argmax M_i)",
             str(opt_max_nome),
-            f"Mi = {sorted_mi[0]:.4f}",
+            f"M_i = {sorted_mi[0]:.4f}",
         ],
         [
-            "Conservador / Menor Risco (argmin mi)",
+            "Conservador / Menor Risco (argmin m_i)",
             str(opt_min_nome),
-            f"mi = {df_resultados['m_i (Probabilidade de Pior Desempenho)'].min():.4f}",
+            f"m_i = {df_resultados['m_i (Probabilidade de Pior Desempenho)'].min():.4f}",
         ],
         [
-            "Margem de Dominância (Robustez)",
+            "Margem de Dominância",
             f"{margem_dominancia*100:.2f}% de vantagem sobre 2º lugar",
             "Alta Estabilidade",
         ],
@@ -499,7 +483,6 @@ def gerar_pdf_relatorio(
     elements.append(t_rec)
     elements.append(Spacer(1, 6))
 
-    # 2. ANÁLISE GRÁFICA
     buf_grafico = gerar_grafico_membro(df_resultados, para_impressao=True)
     img_grafico = RLImage(buf_grafico, width=460, height=160)
 
@@ -534,7 +517,6 @@ def gerar_pdf_relatorio(
     elements.append(KeepTogether([t_quadro]))
     elements.append(Spacer(1, 8))
 
-    # 3. RASTREABILIDADE: ROC E CRITÉRIOS
     elements.append(
         Paragraph(
             "Rastreabilidade: Pesos ROC, Perfis e Tipos de Critérios",
@@ -596,7 +578,6 @@ def gerar_pdf_relatorio(
         )
     )
 
-    # EMBEDDING DE IDENTIDADE CORPORATIVA E DIREITOS AUTORAIS NO RODAPÉ DO PDF
     logo_cell = ""
     if logo_file:
         try:
@@ -652,17 +633,27 @@ def gerar_pdf_relatorio(
 # ==========================================
 
 st.set_page_config(
-    page_title="DSS | CPP-ROC CHOICE", page_icon="📈", layout="wide"
+    page_title="DSS | CPP-ROC-CHOICE", page_icon="📈", layout="wide"
 )
 
 st.markdown(
     """
     <style>
     .stApp { background-color: #f8f9fa; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-    .main-header { background-color: #0f172a; padding: 20px; border-radius: 8px; color: #ffffff; margin-bottom: 20px; }
-    .main-header h1 { color: #ffffff !important; font-size: 24px; font-weight: 600; margin: 0; }
-    .main-header p { color: #94a3b8; font-size: 13px; margin-top: 4px; margin-bottom: 0; }
-    .stButton>button { background-color: #2563eb !important; color: white !important; font-weight: 600 !important; border-radius: 6px !important; border: none !important; width: 100%; }
+    .main-header { background-color: #0f172a; padding: 22px; border-radius: 8px; color: #ffffff; margin-bottom: 20px; }
+    .main-header h1 { color: #ffffff !important; font-size: 22px; font-weight: 700; margin: 0; }
+    .main-header p { color: #94a3b8; font-size: 13px; margin-top: 6px; margin-bottom: 0; }
+    .stButton>button { background-color: #2563eb !important; color: white !important; font-weight: 600 !important; border-radius: 6px !important; border: none !important; width: 100%; height: 45px; }
+    
+    .step-badge {
+        background-color: #2563eb;
+        color: white;
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+        margin-right: 8px;
+    }
     
     .recommendation-card {
         background-color: #f0fdf4;
@@ -679,14 +670,6 @@ st.markdown(
         padding: 20px 0 10px 0;
         border-top: 1px solid #e2e8f0;
         margin-top: 40px;
-    }
-    .footer-rights a {
-        color: #2563eb;
-        text-decoration: none;
-        font-weight: 600;
-    }
-    .footer-rights a:hover {
-        text-decoration: underline;
     }
     </style>
 """,
@@ -706,56 +689,14 @@ if "calculo_executado" not in st.session_state:
 st.sidebar.markdown(
     """
     <div style="padding-bottom: 10px;">
-        <h3 style="margin: 0; color: #0f172a; font-size: 18px;">⚙️ Configurações</h3>
-        <p style="margin: 0; color: #64748b; font-size: 11px;">Parâmetros do Modelo e Simulação</p>
+        <h3 style="margin: 0; color: #0f172a; font-size: 18px;">⚙️ Configurações Técnicas</h3>
+        <p style="margin: 0; color: #64748b; font-size: 11px;">Ajustes de Monte Carlo & Empresa</p>
     </div>
 """,
     unsafe_allow_html=True,
 )
 
-if st.sidebar.button("💡 Carregar Exemplo Prático"):
-    st.session_state["cfg_n_dms"] = 2
-    st.session_state["cfg_n_crit"] = 3
-    st.session_state["cfg_n_alt"] = 3
-    st.session_state["glob_alt_0"] = "Fornecedor Alfa"
-    st.session_state["glob_alt_1"] = "Fornecedor Beta"
-    st.session_state["glob_alt_2"] = "Fornecedor Gama"
-    st.session_state["glob_crit_0"] = "Custo Total"
-    st.session_state["glob_crit_1"] = "Qualidade Técnica"
-    st.session_state["glob_crit_2"] = "Prazo de Entrega"
-    st.session_state["tipo_crit_0"] = "Custo"
-    st.session_state["tipo_crit_1"] = "Benefício"
-    st.session_state["tipo_crit_2"] = "Custo"
-    st.rerun()
-
-with st.sidebar.expander("Estrutura & Escala do Problema", expanded=True):
-    col_d1, col_d2 = st.columns(2)
-    with col_d1:
-        n_dms = st.number_input(
-            "Nº Decisores",
-            min_value=1,
-            max_value=20,
-            value=2,
-            step=1,
-            key="cfg_n_dms",
-        )
-        n_crit = st.number_input(
-            "Nº Critérios",
-            min_value=2,
-            max_value=10,
-            value=3,
-            key="cfg_n_crit",
-        )
-    with col_d2:
-        n_alt = st.number_input(
-            "Nº Alternativas",
-            min_value=2,
-            max_value=20,
-            value=3,
-            key="cfg_n_alt",
-        )
-
-    st.markdown("---")
+with st.sidebar.expander("Escala e Incerteza do Modelo", expanded=True):
     tipo_escala = st.selectbox(
         "Escala dos Dados Brutos:",
         [
@@ -774,7 +715,6 @@ with st.sidebar.expander("Estrutura & Escala do Problema", expanded=True):
     else:
         val_max = 1.0
 
-with st.sidebar.expander("Motor de Monte Carlo & Incerteza", expanded=False):
     pct_incerteza = (
         st.slider(
             "Nível de Incerteza / Variação Perturbativa (%)",
@@ -782,80 +722,29 @@ with st.sidebar.expander("Motor de Monte Carlo & Incerteza", expanded=False):
             max_value=30,
             value=10,
             step=1,
-            help="Define a largura do suporte da distribuição triangular ao redor das notas.",
         )
         / 100.0
     )
 
     n_simulacoes = st.select_slider(
-        "Número de Simulações de Monte Carlo",
+        "Simulações de Monte Carlo",
         options=[1000, 2500, 5000, 10000, 20000],
         value=5000,
     )
 
-with st.sidebar.expander("Rotulagem e Tipos de Critério", expanded=False):
-    st.markdown("**Alternativas**")
-    nomes_alt_globais = [
-        st.text_input(
-            f"Alt {a+1}",
-            value=st.session_state.get(f"glob_alt_{a}", f"Alternativa {a+1}"),
-            key=f"glob_alt_{a}",
-        )
-        for a in range(n_alt)
-    ]
-
-    st.markdown("---")
-    st.markdown("**Critérios & Direção**")
-    nomes_crit_globais = []
-    tipos_crit_globais = []
-
-    for c in range(n_crit):
-        col_c1, col_c2 = st.columns([2, 1])
-        with col_c1:
-            nome_c = st.text_input(
-                f"Crit {c+1}",
-                value=st.session_state.get(
-                    f"glob_crit_{c}", f"Critério {c+1}"
-                ),
-                key=f"glob_crit_{c}",
-            )
-            nomes_crit_globais.append(nome_c)
-        with col_c2:
-            tipo_c = st.selectbox(
-                "Tipo",
-                ["Benefício", "Custo"],
-                index=0
-                if st.session_state.get(f"tipo_crit_{c}", "Benefício")
-                == "Benefício"
-                else 1,
-                key=f"tipo_crit_{c}",
-                help="Benefício: Maior é melhor | Custo: Menor é melhor",
-            )
-            tipos_crit_globais.append(tipo_c)
-
-with st.sidebar.expander("Identidade Corporativa (PDF)", expanded=False):
+with st.sidebar.expander("Identidade Corporativa (Relatório PDF)", expanded=False):
     logo_file = st.file_uploader(
         "Logomarca do Cliente", type=["png", "jpg", "jpeg"], key="logo"
     )
-    st.text_input(
-        "Empresa / Organização",
-        placeholder="Ex: RISE / UFAL",
-        key="emp_nome",
-    )
+    st.text_input("Empresa / Organização", placeholder="Ex: RISE / UFAL", key="emp_nome")
     st.text_input(
         "CNPJ",
         placeholder="Apenas números ou formatado",
         key="emp_cnpj_input",
         on_change=callback_atualizar_cnpj,
     )
-    st.text_input(
-        "Contato / E-mail", placeholder="contato@empresa.com", key="emp_contato"
-    )
-    st.text_input(
-        "Website / Rede Social",
-        value="https://www.instagram.com/rise.ufal/",
-        key="emp_link",
-    )
+    st.text_input("Contato / E-mail", placeholder="contato@empresa.com", key="emp_contato")
+    st.text_input("Website", value="https://www.instagram.com/rise.ufal/", key="emp_link")
     st.text_input(
         "CEP",
         placeholder="00000-000",
@@ -864,7 +753,7 @@ with st.sidebar.expander("Identidade Corporativa (PDF)", expanded=False):
     )
     st.text_area("Endereço", key="emp_end", height=70)
 
-# LOGO NO TOPO
+# CABEÇALHO PRINCIPAL COM TEXTO EXACTO DO PROFESSOR
 col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
 with col_l2:
     try:
@@ -873,149 +762,159 @@ with col_l2:
     except Exception:
         pass
 
-# CABEÇALHO PRINCIPAL
 st.markdown(
     """
     <div class="main-header">
-        <h1>Decision Support System — CPP-ROC-CHOICE</h1>
-        <p>Sistema de Apoio à Decisão Multicritério com Múltiplos Decisores Sob Incerteza Para a Problemática de Escolha</p>
+        <h1>Decision Support System - CPP-ROC-CHOICE</h1>
+        <p>Sistema de Apoio à Decisão Multicritério com Múltiplos Decisores Sob Incerteza. Para a problemática de escolha.</p>
     </div>
 """,
     unsafe_allow_html=True,
 )
 
 tab_app, tab_sens, tab_manual = st.tabs(
-    ["Painel de Avaliação", "Análise de Sensibilidade", "Manual do Método"]
+    ["Painel de Avaliação Decisória", "Análise de Sensibilidade", "Manual do Método"]
 )
 
 with tab_manual:
     st.markdown(
         """
-    ### **MANUAL DO USUÁRIO — MÉTODO CPP-ROC CHOICE**
-
+    ### **MANUAL DO USUÁRIO — CPP-ROC CHOICE**
+    
     O **CPP-ROC CHOICE** combina a **Probabilidade de Composição Probabilística (CPP)** com a ponderação por **Rank Order Centroid (ROC)**.
 
     ---
 
-    #### **1. Trata-se do Tratamento de Critérios de Custo**
-    * **Benefício:** Quanto maior o valor, melhor a alternativa.
-    * **Custo:** Quanto menor o valor, melhor a alternativa. O motor realiza a conversão automática através de complementaridade normalizada ($1 - x_{norm}$).
-
-    ---
-
-    #### **2. Simulação de Monte Carlo & Distribuição Triangular**
-    * Cada nota informada pelos decisores torna-se a moda de uma distribuição triangular estocástica. O suporte da distribuição varia de acordo com o **Perfil Estratégico** e o **Nível de Incerteza** ajustado.
+    #### **Matriz de Perfis Estratégicos dos Decisores (Tabela 2)**
+    Para cada decisor, deve ser associado um perfil combinando duas perspectivas:
+    * **Coluna 1 (Tendência):** `Optimistic` (Otimista) ou `Progressive` (Progressista).
+    * **Coluna 2 (Comportamento):** `Pessimistic` (Pessimista) ou `Conservative` (Conservador).
     """
     )
 
 with tab_app:
+    # -------------------------------------------------------------
+    # ETAPA 1: ESTRUTURA DO PROBLEMA (DECISORES, CRITÉRIOS, ALTERNATIVAS)
+    # -------------------------------------------------------------
+    st.markdown("### <span class='step-badge'>ETAPA 1</span> **Definição da Estrutura do Problema**", unsafe_allow_html=True)
+    st.caption("Cadastre o número de decisores, a quantidade de critérios e alternativas envolvidas.")
+    
+    col_e1, col_e2, col_e3 = st.columns(3)
+    with col_e1:
+        n_dms = st.number_input("Nº de Decisores", min_value=1, max_value=20, value=2, step=1, key="cfg_n_dms")
+    with col_e2:
+        n_crit = st.number_input("Nº de Critérios", min_value=2, max_value=10, value=3, step=1, key="cfg_n_crit")
+    with col_e3:
+        n_alt = st.number_input("Nº de Alternativas", min_value=2, max_value=20, value=3, step=1, key="cfg_n_alt")
+
+    st.markdown("---")
+
+    # Cadastramento de Alternativas e Critérios
+    col_cad1, col_cad2 = st.columns(2)
+    with col_cad1:
+        st.markdown("#### **📌 Cadastro das Alternativas**")
+        nomes_alt_globais = [
+            st.text_input(
+                f"Alternativa {a+1}:",
+                value=st.session_state.get(f"glob_alt_{a}", f"Alternativa {a+1}"),
+                key=f"glob_alt_{a}",
+            )
+            for a in range(n_alt)
+        ]
+
+    with col_cad2:
+        st.markdown("#### **📊 Cadastro dos Critérios e Direção**")
+        nomes_crit_globais = []
+        tipos_crit_globais = []
+        for c in range(n_crit):
+            col_c1, col_c2 = st.columns([2, 1])
+            with col_c1:
+                nome_c = st.text_input(
+                    f"Critério {c+1}:",
+                    value=st.session_state.get(f"glob_crit_{c}", f"Critério {c+1}"),
+                    key=f"glob_crit_{c}",
+                )
+                nomes_crit_globais.append(nome_c)
+            with col_c2:
+                tipo_c = st.selectbox(
+                    "Tipo",
+                    ["Benefício", "Custo"],
+                    index=0,
+                    key=f"tipo_crit_{c}",
+                )
+                tipos_crit_globais.append(tipo_c)
+
+    st.markdown("---")
+
+    # -------------------------------------------------------------
+    # ETAPA 2: ENTRADA DOS DECISORES (PERFIS, NOTAS E PESOS ROC)
+    # -------------------------------------------------------------
+    st.markdown("### <span class='step-badge'>ETAPA 2</span> **Avaliação, Perfis dos Decisores e Ponderação ROC**", unsafe_allow_html=True)
+    st.caption("Cada decisor informa sua matriz de desempenho, define sua ordenação de preferência dos critérios (ROC) e seleciona seu Perfil Decisório.")
+
     matrizes_dms = []
     ordens_dms = []
     perfis_dms = []
     nomes_dms_finais = []
 
-    st.markdown("### **Painel de Entrada de Dados dos Decisores**")
-
-    col_up1, col_up2 = st.columns([2, 1])
-    with col_up1:
-        arquivo_carregado = st.file_uploader(
-            "Carregar Matriz Completa via Arquivo (CSV ou Excel):",
-            type=["csv", "xlsx"],
-            key="file_import_global",
-        )
-    with col_up2:
-        st.markdown("<br/>", unsafe_allow_html=True)
-        if arquivo_carregado is not None:
-            try:
-                if arquivo_carregado.name.endswith(".csv"):
-                    df_imp = pd.read_csv(arquivo_carregado, index_col=0)
-                else:
-                    # Tenta ler o excel definindo explicitamente o motor openpyxl com fallback tratável
-                    try:
-                        df_imp = pd.read_excel(arquivo_carregado, index_col=0, engine="openpyxl")
-                    except Exception:
-                        df_imp = pd.read_excel(arquivo_carregado, index_col=0)
-                st.success("Dados importados com sucesso!")
-            except Exception as e:
-                st.error(f"Erro ao ler arquivo: {e}")
-                df_imp = None
-        else:
-            df_imp = None
-
     abas_dms = st.tabs([f"Decisor {d+1}" for d in range(n_dms)])
 
-    opcoes_eixo_1 = [
-        "Otimista",
-        "Progressista",
-        "Neutro",
-        "Racional",
-        "Pessimista",
-    ]
-    opcoes_eixo_2 = ["Conservador", "Moderado", "Agressivo"]
+    # OPÇÕES ESTRITAMENTE EMBASADAS NA TABELA 2
+    opcoes_coluna_1 = ["Optimistic (Otimista)", "Progressive (Progressista)"]
+    opcoes_coluna_2 = ["Pessimistic (Pessimista)", "Conservative (Conservador)"]
 
     for d, aba in enumerate(abas_dms):
         with aba:
             col_id1, col_id2 = st.columns([1, 2])
             with col_id1:
                 nome_dm = st.text_input(
-                    f"Identificação do Decisor {d+1}:",
+                    f"Nome/Identificação do Decisor {d+1}:",
                     value=f"Decisor {d+1}",
                     key=f"nome_dm_input_{d}",
                 )
                 nomes_dms_finais.append(nome_dm)
 
-            st.markdown(f"#### **Perfil Estratégico do {nome_dm}**")
+            # PERFIL DO DECISOR (TABELA 2 DO ARTIGO)
+            st.markdown(f"##### 👤 **Perfil Decisório do {nome_dm} (Tabela 2)**")
             col_p1, col_p2 = st.columns(2)
             with col_p1:
-                perfil_1 = st.selectbox(
-                    f"Eixo 1 (Tendência) - {nome_dm}:",
-                    opcoes_eixo_1,
+                perfil_col1 = st.selectbox(
+                    f"Perfil Coluna 1 (Tendência) — {nome_dm}:",
+                    opcoes_coluna_1,
                     index=0 if d % 2 == 0 else 1,
-                    key=f"dm_perfil_e1_{d}",
+                    key=f"dm_perfil_col1_{d}",
                 )
             with col_p2:
-                perfil_2 = st.selectbox(
-                    f"Eixo 2 (Comportamento) - {nome_dm}:",
-                    opcoes_eixo_2,
-                    index=0,
-                    key=f"dm_perfil_e2_{d}",
+                perfil_col2 = st.selectbox(
+                    f"Perfil Coluna 2 (Comportamento) — {nome_dm}:",
+                    opcoes_coluna_2,
+                    index=0 if d % 2 == 0 else 1,
+                    key=f"dm_perfil_col2_{d}",
                 )
 
-            perfis_dms.append((perfil_1, perfil_2))
+            perfis_dms.append((perfil_col1, perfil_col2))
             st.divider()
 
             col1, col2 = st.columns([2, 1])
             with col1:
-                st.markdown(f"#### **Matriz de Avaliação de Alternativas**")
-                if df_imp is not None:
-                    df_init = df_imp.copy()
-                else:
-                    valores_iniciais = np.round(
-                        np.random.rand(n_alt, n_crit) * val_max, 2
-                    )
-                    df_init = pd.DataFrame(
-                        valores_iniciais,
-                        columns=nomes_crit_globais,
-                        index=nomes_alt_globais,
-                    )
+                st.markdown(f"##### 📝 **Matriz de Avaliação de Alternativas**")
+                valores_iniciais = np.round(
+                    np.random.rand(n_alt, n_crit) * val_max, 2
+                )
+                df_init = pd.DataFrame(
+                    valores_iniciais,
+                    columns=nomes_crit_globais,
+                    index=nomes_alt_globais,
+                )
 
                 df_editada = st.data_editor(
                     df_init, key=f"matriz_indiv_{d}_v2"
                 )
                 matrizes_dms.append(df_editada.values)
 
-                csv_buffer = df_editada.to_csv().encode("utf-8")
-                st.download_button(
-                    label=f"📥 Baixar Matriz do {nome_dm} (CSV)",
-                    data=csv_buffer,
-                    file_name=f"matriz_{nome_dm.lower().replace(' ', '_')}.csv",
-                    mime="text/csv",
-                    key=f"btn_dl_csv_{d}",
-                )
-
             with col2:
-                st.markdown("#### **Ordenação de Preferência (ROC)**")
-                st.caption("Selecione a ordem de importância dos critérios (1º = mais importante):")
+                st.markdown("##### ⚖️ **Ordenação ROC dos Critérios**")
+                st.caption("Ordene do mais importante (1º) ao menos importante:")
                 ordem_indices = []
                 criterios_disponiveis = list(range(n_crit))
                 
@@ -1031,6 +930,12 @@ with tab_app:
                 ordens_dms.append(ordem_indices)
 
     st.markdown("---")
+
+    # -------------------------------------------------------------
+    # ETAPA 3: EXECUÇÃO E RECOMENDAÇÃO FINAL
+    # -------------------------------------------------------------
+    st.markdown("### <span class='step-badge'>ETAPA 3</span> **Processamento & Recomendações**", unsafe_allow_html=True)
+
     if st.button("🚀 EXECUTAR ANÁLISE DE DECISÃO", key="btn_executar"):
         st.session_state["calculo_executado"] = True
 
@@ -1050,7 +955,7 @@ with tab_app:
         df_res = pd.DataFrame(
             {
                 "Alternativa": nomes_alt_globais,
-                "Mi (Probabilidade de Excelência)": res["M_i"],
+                "M_i (Probabilidade de Excelência)": res["M_i"],
                 "m_i (Probabilidade de Pior Desempenho)": res["m_i"],
             }
         )
@@ -1058,7 +963,7 @@ with tab_app:
         opt_max_nome = nomes_alt_globais[res["otima_max_Mi"]]
         opt_min_nome = nomes_alt_globais[res["otima_min_mi"]]
 
-        st.markdown("### **Resultados do Processo Decisório**")
+        st.markdown("#### **Resultados da Análise Multicritério**")
         
         col_r1, col_r2 = st.columns(2)
         with col_r1:
@@ -1067,7 +972,7 @@ with tab_app:
             <div class="recommendation-card">
                 <h4 style="margin:0; color:#16a34a;">🏆 Recomendação Principal (Maximotimizador)</h4>
                 <p style="margin:5px 0 0 0; font-size:16px;"><b>{opt_max_nome}</b></p>
-                <span style="font-size:12px; color:#15803d;">Maior probabilidade agregada de excelência (M<sub>i</sub> = {res['M_i'][res['otima_max_Mi']]:.4f})</span>
+                <span style="font-size:12px; color:#15803d;">Maior probabilidade de excelência (M<sub>i</sub> = {res['M_i'][res['otima_max_Mi']]:.4f})</span>
             </div>
             """,
                 unsafe_allow_html=True,
@@ -1084,7 +989,7 @@ with tab_app:
                 unsafe_allow_html=True,
             )
 
-        st.dataframe(df_res.style.highlight_max(subset=["Mi (Probabilidade de Excelência)"], color="#dcfce7"), use_container_width=True)
+        st.dataframe(df_res.style.highlight_max(subset=["M_i (Probabilidade de Excelência)"], color="#dcfce7"), use_container_width=True)
 
         col_g1, col_g2 = st.columns([2, 1])
         with col_g1:
@@ -1125,9 +1030,9 @@ with tab_app:
 with tab_sens:
     st.markdown("### **Análise de Sensibilidade Estocástica**")
     if st.session_state.get("calculo_executado", False):
-        st.info("Execute simulações com diferentes níveis de variação e Monte Carlo na barra lateral para avaliar a estabilidade dos resultados.")
+        st.info("Altere o nível de variação perturbativa (%) e execute a simulação para observar a estabilidade dos rankings de M_i e m_i.")
     else:
-        st.warning("Por favor, execute o cálculo no 'Painel de Avaliação' primeiro.")
+        st.warning("Execute o cálculo na aba 'Painel de Avaliação Decisória' primeiro.")
 
 st.markdown(
     """
