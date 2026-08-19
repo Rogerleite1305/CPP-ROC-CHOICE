@@ -50,7 +50,6 @@ def imagem_para_base64(image_file, largura=44, altura=44):
 def formatar_cnpj(cnpj_raw):
     if not cnpj_raw:
         return ""
-    # Aceita caracteres alfanuméricos (letras e números) e converte para maiúsculo
     limpo = re.sub(r"[^a-zA-Z0-9]", "", str(cnpj_raw)).upper()
     if len(limpo) == 14:
         return (
@@ -211,9 +210,9 @@ def gerar_grafico_membro(df_resultados):
 
     ax.bar(
         x - largura / 2,
-        df_resultados["M_i (Probabilidade de Excelência)"],
+        df_resultados["Mi (Probabilidade de Excelência)"],
         largura,
-        label="M_i (Excelência)",
+        label="Mi (Excelência)",
         color="#2563eb",
     )
     ax.bar(
@@ -330,7 +329,7 @@ def gerar_pdf_relatorio(
         )
     )
 
-    sorted_mi = np.sort(df_resultados["M_i (Probabilidade de Excelência)"])[
+    sorted_mi = np.sort(df_resultados["Mi (Probabilidade de Excelência)"])[
         ::-1
     ]
     margem_dominancia = (
@@ -627,10 +626,7 @@ with st.sidebar.expander(
     "⚙️ Configurações Visuais e Cadastrais", expanded=False
 ):
     logo_file = st.file_uploader(
-        "Logo da Empresa", type=["png", "jpg", "jpeg"], key="logo"
-    )
-    banner_file = st.file_uploader(
-        "Banner Superior", type=["png", "jpg", "jpeg"], key="banner"
+        "Logo da Empresa (Rodapé e PDF)", type=["png", "jpg", "jpeg"], key="logo"
     )
 
     st.text_input(
@@ -658,17 +654,21 @@ with st.sidebar.expander(
     )
     st.text_area("Endereço Completo", key="emp_end")
 
-# EXIBIÇÃO DO BANNER NO TOPO
-if banner_file:
-    st.image(
-        redimensionar_imagem(banner_file, 1200, 300), use_container_width=True
-    )
+# EXIBIÇÃO DA LOGO CENTRALIZADA COM LARGURA FIXA
+col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
+with col_l2:
+    try:
+        url_logo_github = "https://raw.githubusercontent.com/Rogerleite1305/CPP-ROC-CHOISE/main/LOGO%20CPP-ROC-CHOICE.png"
+        st.image(url_logo_github, width=230)
+    except Exception:
+        st.warning("Não foi possível carregar a logo oficial do topo.")
 
+# TÍTULO PRINCIPAL E SUBTÍTULO
 st.markdown(
     """
     <div class="main-header">
-        <h1>DECISION SUPPORT SYSTEM — CPP-ROC CHOICE</h1>
-        <p>Apoio à Decisão Multicritério com Rastreabilidade de Cálculos e Análise de Sensibilidade</p>
+        <h1>Decision Support System — CPP-ROC-CHOICE</h1>
+        <p>Sistema de Apoio à Decisão Multicritério com Múltiplos Decisores Sob Incerteza</p>
     </div>
 """,
     unsafe_allow_html=True,
@@ -735,13 +735,40 @@ with tab_app:
     matrizes_dms = []
     ordens_dms = []
 
+    # SINALIZAÇÃO DE ETAPAS
+    st.info("📌 **Fluxo de Avaliação em 3 Etapas:** Complete os passos abaixo para cada decisor antes de executar a análise.")
+
+    col_e1, col_e2, col_e3 = st.columns(3)
+    col_e1.markdown("1️⃣ **Matriz de Notas** (Alternativas vs Critérios)")
+    col_e2.markdown("2️⃣ **Pesos ROC** (Ranking de Critérios)")
+    col_e3.markdown("3️⃣ **Perfil do Decisor** (Identificação)")
+
+    st.markdown("---")
     st.markdown("### **Painel de Avaliação dos Decisores**")
     abas_dms = st.tabs([f"👤 {nome_dm}" for nome_dm in nomes_dms_globais])
 
     for d, aba in enumerate(abas_dms):
         with aba:
+            # SELEÇÃO DE PERFIL DO DECISOR
+            perfil_dm = st.selectbox(
+                f"Selecione o Perfil do {nomes_dms_globais[d]}:",
+                [
+                    "Especialista Técnico",
+                    "Gestor de Risco (Conservador)",
+                    "Tomador de Decisão Estratégico",
+                    "Avaliador Financeiro",
+                    "Stakeholder Operacional"
+                ],
+                key=f"perfil_dm_{d}"
+            )
+            st.caption(f"Perfil selecionado: **{perfil_dm}**")
+            st.divider()
+
+            # SINALIZAÇÃO CLARA DAS MATRIZES E PESOS ROC
             col1, col2 = st.columns([2, 1])
             with col1:
+                st.markdown("#### 📋 **Matriz de Avaliação**")
+                st.caption("Linhas = **Alternativas** | Colunas = **Critérios**")
                 st.caption(rotulo_matriz)
                 valores_iniciais = np.round(
                     np.random.rand(n_alt, n_crit) * val_max, 2
@@ -755,13 +782,14 @@ with tab_app:
                 matrizes_dms.append(df_editada.values)
 
             with col2:
-                st.caption("Ranking de Importância dos Critérios (ROC)")
+                st.markdown("#### ⚖️ **Pesos ROC (Critérios)**")
+                st.caption("Ordene a importância dos **Critérios** (1º = mais importante):")
                 ordem = []
                 criterios_disp = list(nomes_crit_globais)
                 for r in range(n_crit):
                     default_idx = min(r, len(criterios_disp) - 1)
                     escolha = st.selectbox(
-                        f"Prioridade {r+1}",
+                        f"Critério em {r+1}º Lugar",
                         criterios_disp,
                         index=default_idx,
                         key=f"dm_{d}_rank_{r}",
@@ -780,10 +808,11 @@ with tab_app:
             alt_opt_max_nome = nomes_alt_globais[res["otima_max_Mi"]]
             alt_opt_min_nome = nomes_alt_globais[res["otima_min_mi"]]
 
+            # NOTAÇÃO DAS PROBABILIDADES (Mi e m_i)
             df_res = pd.DataFrame(
                 {
                     "Alternativa": nomes_alt_globais,
-                    "M_i (Probabilidade de Excelência)": res["M_i"],
+                    "Mi (Probabilidade de Excelência)": res["M_i"],
                     "m_i (Probabilidade de Pior Desempenho)": res["m_i"],
                 }
             )
@@ -869,7 +898,7 @@ with tab_app:
             )
             dm_contrib_data = {"Alternativa": nomes_alt_globais}
             for d in range(n_dms):
-                dm_contrib_data[f"Suporte {nomes_dms_globais[d]} (M_i)"] = res[
+                dm_contrib_data[f"Suporte {nomes_dms_globais[d]} (Mi)"] = res[
                     "detalhes_dms"
                 ][d]["M_contribuicao"]
             st.dataframe(
@@ -924,12 +953,14 @@ card_empresa_footer_html = (
     f"</div>"
 )
 
-copyright_html = (
-    '<div class="copyright-footer">'
-    '© <a href="https://www.instagram.com/rise.ufal/" target="_blank">RISE-UFAL</a> — Resilient Infrastructure & Systems Engineering Lab | Universidade Federal de Alagoas.<br/>'
-    "Todos os direitos reservados. Sistema de Apoio à Decisão Multicritério (CPP-ROC CHOICE)."
-    "</div>"
-)
-
 st.markdown(card_empresa_footer_html, unsafe_allow_html=True)
-st.markdown(copyright_html, unsafe_allow_html=True)
+
+st.markdown(
+    """
+    <div class="copyright-footer">
+        © Desenvolvido pelo Grupo RISE / UFAL — Todos os direitos reservados. 
+        <br/><a href="https://instagram.com/rise.ufal" target="_blank">Siga o RISE no Instagram: @rise.ufal</a>
+    </div>
+""",
+    unsafe_allow_html=True,
+)
