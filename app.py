@@ -610,7 +610,7 @@ def gerar_pdf_relatorio(
             logo_cell = ""
 
     url_rise = "https://www.instagram.com/rise.ufal/"
-    
+
     info_text = f"<b>Organização Solicitante:</b> {empresa_nome if empresa_nome else 'Não informada'}"
     if empresa_link:
         url_val = empresa_link if empresa_link.startswith("http") else f"https://{empresa_link}"
@@ -757,7 +757,7 @@ with st.sidebar.expander("Estrutura & Escala do Problema", expanded=True):
 
     st.markdown("---")
     tipo_escala = st.selectbox(
-        "Escala dos Dados Brutais:",
+        "Escala dos Dados Brutos:",
         [
             "[0, 1] - Normalizada",
             "[0, 10] - Notas de 0 a 10",
@@ -930,7 +930,11 @@ with tab_app:
                 if arquivo_carregado.name.endswith(".csv"):
                     df_imp = pd.read_csv(arquivo_carregado, index_col=0)
                 else:
-                    df_imp = pd.read_excel(arquivo_carregado, index_col=0)
+                    # Tenta ler o excel definindo explicitamente o motor openpyxl com fallback tratável
+                    try:
+                        df_imp = pd.read_excel(arquivo_carregado, index_col=0, engine="openpyxl")
+                    except Exception:
+                        df_imp = pd.read_excel(arquivo_carregado, index_col=0)
                 st.success("Dados importados com sucesso!")
             except Exception as e:
                 st.error(f"Erro ao ler arquivo: {e}")
@@ -1011,205 +1015,124 @@ with tab_app:
 
             with col2:
                 st.markdown("#### **Ordenação de Preferência (ROC)**")
-                ordem = []
-                criterios_disp = list(nomes_crit_globais)
+                st.caption("Selecione a ordem de importância dos critérios (1º = mais importante):")
+                ordem_indices = []
+                criterios_disponiveis = list(range(n_crit))
+                
                 for r in range(n_crit):
-                    default_idx = min(r, len(criterios_disp) - 1)
-                    escolha = st.selectbox(
-                        f"Critério em {r+1}º Lugar",
-                        criterios_disp,
-                        index=default_idx,
-                        key=f"dm_{d}_rank_{r}_v2",
+                    crit_selecionado_idx = st.selectbox(
+                        f"{r+1}º Lugar de Importância:",
+                        options=criterios_disponiveis,
+                        format_func=lambda x: nomes_crit_globais[x],
+                        key=f"dm_{d}_rank_{r}",
                     )
-                    ordem.append(nomes_crit_globais.index(escolha))
-                ordens_dms.append(ordem)
+                    ordem_indices.append(crit_selecionado_idx)
+                
+                ordens_dms.append(ordem_indices)
 
-    st.divider()
+    st.markdown("---")
+    if st.button("🚀 EXECUTAR ANÁLISE DE DECISÃO", key="btn_executar"):
+        st.session_state["calculo_executado"] = True
 
-    if st.button("🚀 EXECUTAR ANÁLISE DE DECISÃO"):
-        with st.spinner(
-            "Executando simulações estocásticas de Monte Carlo e normalizando critérios..."
-        ):
-            res = executar_cpp_roc_choice(
-                matrizes_dms,
-                ordens_dms,
-                perfis_dms,
-                tipos_crit_globais,
-                val_max=val_max,
-                pct_incerteza=pct_incerteza,
-                n_simulacoes=n_simulacoes,
-            )
-
-            alt_opt_max_nome = nomes_alt_globais[res["otima_max_Mi"]]
-            alt_opt_min_nome = nomes_alt_globais[res["otima_min_mi"]]
-
-            df_res = pd.DataFrame(
-                {
-                    "Alternativa": nomes_alt_globais,
-                    "Mi (Probabilidade de Excelência)": res["M_i"],
-                    "m_i (Probabilidade de Pior Desempenho)": res["m_i"],
-                }
-            )
-
-            pdf_bytes = gerar_pdf_relatorio(
-                df_res,
-                res,
-                alt_opt_max_nome,
-                alt_opt_min_nome,
-                n_dms,
-                n_alt,
-                n_crit,
-                nomes_crit_globais,
-                tipos_crit_globais,
-                nomes_dms_finais,
-                st.session_state.get("emp_nome", ""),
-                st.session_state.get("emp_cnpj", ""),
-                st.session_state.get("emp_contato", ""),
-                st.session_state.get("cep_formatado", ""),
-                st.session_state.get("emp_end", ""),
-                st.session_state.get("emp_link", "https://www.instagram.com/rise.ufal/"),
-                logo_file,
-            )
-
-            st.session_state["res"] = res
-            st.session_state["df_res"] = df_res
-            st.session_state["pdf_bytes"] = pdf_bytes
-            st.session_state["alt_opt_max_nome"] = alt_opt_max_nome
-            st.session_state["alt_opt_min_nome"] = alt_opt_min_nome
-            st.session_state["nomes_dms_finais"] = nomes_dms_finais
-            st.session_state["matrizes_dms"] = matrizes_dms
-            st.session_state["ordens_dms"] = ordens_dms
-            st.session_state["perfis_dms"] = perfis_dms
-            st.session_state["tipos_crit_globais"] = tipos_crit_globais
-            st.session_state["calculo_executado"] = True
-
-    # EXIBIÇÃO DOS RESULTADOS NA PÁGINA INICIAL
     if st.session_state.get("calculo_executado", False):
-        res = st.session_state["res"]
-        df_res = st.session_state["df_res"]
-        pdf_bytes = st.session_state["pdf_bytes"]
-        alt_opt_max_nome = st.session_state["alt_opt_max_nome"]
-        alt_opt_min_nome = st.session_state["alt_opt_min_nome"]
+        res = executar_cpp_roc_choice(
+            matrizes_dms=matrizes_dms,
+            ordens_criterios_dms=ordens_dms,
+            perfis_dms=perfis_dms,
+            tipos_criterios=tipos_crit_globais,
+            val_max=val_max,
+            pct_incerteza=pct_incerteza,
+            n_simulacoes=n_simulacoes,
+        )
 
-        st.markdown("---")
-        st.markdown("### **Resultado da Análise — Problemática de Escolha**")
+        st.session_state["ultimo_resultado"] = res
 
-        col_r1, col_r2 = st.columns([1.8, 1])
+        df_res = pd.DataFrame(
+            {
+                "Alternativa": nomes_alt_globais,
+                "Mi (Probabilidade de Excelência)": res["M_i"],
+                "m_i (Probabilidade de Pior Desempenho)": res["m_i"],
+            }
+        )
+
+        opt_max_nome = nomes_alt_globais[res["otima_max_Mi"]]
+        opt_min_nome = nomes_alt_globais[res["otima_min_mi"]]
+
+        st.markdown("### **Resultados do Processo Decisório**")
+        
+        col_r1, col_r2 = st.columns(2)
         with col_r1:
             st.markdown(
                 f"""
-                <div class="recommendation-card">
-                    <h4 style="margin: 0; color: #15803d;">🏆 Alternativa Recomendada (Máxima Excelência): <b>{alt_opt_max_nome}</b></h4>
-                    <p style="margin: 5px 0 0 0; font-size: 13px; color: #166534;">
-                        Alternativa com menor risco (argmin m_i): <b>{alt_opt_min_nome}</b>
-                    </p>
-                </div>
+            <div class="recommendation-card">
+                <h4 style="margin:0; color:#16a34a;">🏆 Recomendação Principal (Maximotimizador)</h4>
+                <p style="margin:5px 0 0 0; font-size:16px;"><b>{opt_max_nome}</b></p>
+                <span style="font-size:12px; color:#15803d;">Maior probabilidade agregada de excelência (M<sub>i</sub> = {res['M_i'][res['otima_max_Mi']]:.4f})</span>
+            </div>
+            """,
+                unsafe_allow_html=True,
+            )
+        with col_r2:
+            st.markdown(
+                f"""
+            <div class="recommendation-card" style="background-color:#eff6ff; border-color:#bfdbfe; border-left-color:#2563eb;">
+                <h4 style="margin:0; color:#1d4ed8;">🛡️ Opção de Menor Risco (Conservadora)</h4>
+                <p style="margin:5px 0 0 0; font-size:16px;"><b>{opt_min_nome}</b></p>
+                <span style="font-size:12px; color:#1e40af;">Menor probabilidade de pior desempenho (m<sub>i</sub> = {res['m_i'][res['otima_min_mi']]:.4f})</span>
+            </div>
             """,
                 unsafe_allow_html=True,
             )
 
-            st.dataframe(
-                df_res.style.highlight_max(
-                    axis=0,
-                    subset=["Mi (Probabilidade de Excelência)"],
-                    color="#bbf7d0",
-                ).highlight_min(
-                    axis=0,
-                    subset=["m_i (Probabilidade de Pior Desempenho)"],
-                    color="#bfdbfe",
-                ),
-                use_container_width=True,
+        st.dataframe(df_res.style.highlight_max(subset=["Mi (Probabilidade de Excelência)"], color="#dcfce7"), use_container_width=True)
+
+        col_g1, col_g2 = st.columns([2, 1])
+        with col_g1:
+            fig_buf = gerar_grafico_membro(df_res)
+            st.image(fig_buf, caption="Distribuição de Probabilidades M_i vs m_i por Alternativa", use_container_width=True)
+
+        with col_g2:
+            st.markdown("#### **Ações de Exportação**")
+            
+            pdf_bytes = gerar_pdf_relatorio(
+                df_resultados=df_res,
+                resultado_completo=res,
+                opt_max_nome=opt_max_nome,
+                opt_min_nome=opt_min_nome,
+                n_dms=n_dms,
+                n_alt=n_alt,
+                n_crit=n_crit,
+                nomes_criterios=nomes_crit_globais,
+                tipos_criterios=tipos_crit_globais,
+                nomes_dms=nomes_dms_finais,
+                empresa_nome=st.session_state.get("emp_nome", ""),
+                empresa_cnpj=st.session_state.get("emp_cnpj", ""),
+                empresa_contato=st.session_state.get("emp_contato", ""),
+                empresa_cep=st.session_state.get("cep_formatado", ""),
+                empresa_end=st.session_state.get("emp_end", ""),
+                empresa_link=st.session_state.get("emp_link", ""),
+                logo_file=logo_file,
             )
 
-        with col_r2:
-            st.markdown("#### **Visualização Gráfica**")
-            buf_img_tela = gerar_grafico_membro(df_res, para_impressao=False)
-
-            st.image(
-                buf_img_tela,
-                use_container_width=True,
-                caption="Probabilidades Agregadas Mi e mi",
-            )
-
-            st.markdown("#### **Download do Relatório**")
             st.download_button(
-                label="📄 Baixar Relatório Executivo PDF (Oficial)",
+                label="📄 Baixar Relatório Completo em PDF",
                 data=pdf_bytes,
-                file_name="Relatorio_Executivo_CPP_ROC_CHOICE.pdf",
+                file_name=f"relatorio_decisao_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
                 mime="application/pdf",
-                key="btn_download_pdf_main",
+                key="btn_pdf",
             )
 
-# TAB DE ANÁLISE DE SENSIBILIDADE
 with tab_sens:
-    st.markdown("### **Módulo de Análise de Sensibilidade Estocástica**")
-
-    if not st.session_state.get("calculo_executado", False):
-        st.info("Execute primeiro a análise de decisão no painel principal.")
+    st.markdown("### **Análise de Sensibilidade Estocástica**")
+    if st.session_state.get("calculo_executado", False):
+        st.info("Execute simulações com diferentes níveis de variação e Monte Carlo na barra lateral para avaliar a estabilidade dos resultados.")
     else:
-        st.write(
-            "Avalie como o ranking varia ao alterar a volatilidade ou a quantidade de simulações Monte Carlo."
-        )
+        st.warning("Por favor, execute o cálculo no 'Painel de Avaliação' primeiro.")
 
-        col_s1, col_s2 = st.columns(2)
-        with col_s1:
-            test_incerteza = (
-                st.slider(
-                    "Testar Nível de Incerteza Perturbativa (%)",
-                    min_value=1,
-                    max_value=40,
-                    value=15,
-                )
-                / 100.0
-            )
-        with col_s2:
-            test_sims = st.selectbox(
-                "Testar Quantidade de Monte Carlo", [1000, 5000, 10000]
-            )
-
-        if st.button("Simular Sensibilidade"):
-            res_sens = executar_cpp_roc_choice(
-                st.session_state["matrizes_dms"],
-                st.session_state["ordens_dms"],
-                st.session_state["perfis_dms"],
-                st.session_state["tipos_crit_globais"],
-                val_max=val_max,
-                pct_incerteza=test_incerteza,
-                n_simulacoes=test_sims,
-            )
-
-            df_sens = pd.DataFrame(
-                {
-                    "Alternativa": nomes_alt_globais,
-                    "Mi Original": df_res["Mi (Probabilidade de Excelência)"],
-                    "Mi Teste Sensibilidade": res_sens["M_i"],
-                    "Variação Absoluta": res_sens["M_i"]
-                    - df_res["Mi (Probabilidade de Excelência)"],
-                }
-            )
-
-            st.dataframe(df_sens, use_container_width=True)
-            if (
-                res_sens["otima_max_Mi"]
-                == st.session_state["res"]["otima_max_Mi"]
-            ):
-                st.success(
-                    "O resultado é **ROBUSTO**: A mesma alternativa permaneceu em 1º lugar!"
-                )
-            else:
-                st.warning(
-                    "O resultado é **SENSÍVEL**: Houve alteração no topo do ranking!"
-                )
-
-# ==========================================
-# 5. RODAPÉ DE DIREITOS AUTORAIS E CRÉDITOS
-# ==========================================
 st.markdown(
     """
     <div class="footer-rights">
-        DSS CPP-ROC CHOICE © Todos os direitos reservados.<br/>
-        Desenvolvido pelo grupo de pesquisa <b>RISE</b> — Universidade Federal de Alagoas (UFAL).<br/>
-        Siga no Instagram: <a href="https://www.instagram.com/rise.ufal/" target="_blank">@rise.ufal</a>
+        DSS CPP-ROC CHOICE — Desenvolvido por <a href="https://www.instagram.com/rise.ufal/" target="_blank">RISE/UFAL</a> © Todos os direitos reservados.
     </div>
 """,
     unsafe_allow_html=True,
