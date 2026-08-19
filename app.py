@@ -893,191 +893,106 @@ with tab_manual:
     """
     )
 
-with tab_sens:
-    st.markdown("### 📊 Análise de Sensibilidade Automática")
-
-    # 1. Verifica se os cálculos principais já foram executados
-    if not st.session_state.get("calculo_executado", False):
-        st.info("💡 Por favor, execute primeiro a análise no **Painel de Avaliação** para gerar os dados de sensibilidade.")
-    else:
-        st.success("✅ Dados base identificados! A análise de sensibilidade foi gerada automaticamente.")
-
-        # =========================================================
-        # CENÁRIO 1: SENSIBILIDADE AO NÍVEL DE INCERTEZA (PERTURBAÇÃO)
-        # =========================================================
-        st.markdown("#### 1. Impacto da Variação do Nível de Incerteza (%)")
-        st.caption("Verifica se a alternativa vencedora muda conforme aumentamos ou diminuímos a volatilidade/incerteza dos dados.")
-
-        cenarios_incerteza = [0.05, 0.10, 0.15, 0.20, 0.30]
-        resultados_sens_incerteza = []
-
-        # Executa variações automáticas do modelo
-        for inc in cenarios_incerteza:
-            res_temp = executar_cpp_roc_choice(
-                matrizes_dms=matrizes_dms,
-                ordens_criterios_dms=ordens_dms,
-                perfis_dms=perfis_dms,
-                tipos_criterios=tipos_crit_globais,
-                val_max=val_max,
-                pct_incerteza=inc,
-                n_simulacoes=2000 # Simulação rápida para sensibilidade
-            )
-            vencedor = nomes_alt_globais[res_temp["otima_max_Mi"]]
-            
-            row = {"Incerteza (%)": f"{int(inc*100)}%", "Alternativa Vencedora": vencedor}
-            for idx_alt, nome_a in enumerate(nomes_alt_globais):
-                row[f"Mi ({nome_a})"] = round(res_temp["M_i"][idx_alt], 4)
-            resultados_sens_incerteza.append(row)
-
-        df_sens_inc = pd.DataFrame(resultados_sens_incerteza)
-
-        # Exibição dos resultados em tabela e gráfico
-        col_s1, col_s2 = st.columns([1, 1.2])
-        
-        with col_s1:
-            st.dataframe(df_sens_inc, hide_index=True, use_container_width=True)
-
-        with col_s2:
-            fig_sens, ax_sens = plt.subplots(figsize=(6, 3.5), dpi=120)
-            x_vals = [f"{int(i*100)}%" for i in cenarios_incerteza]
-            
-            for nome_a in nomes_alt_globais:
-                ax_sens.plot(x_vals, df_sens_inc[f"Mi ({nome_a})"], marker='o', label=nome_a)
-                
-            ax_sens.set_xlabel("Nível de Incerteza (%)")
-            ax_sens.set_ylabel("Probabilidade $M_i$")
-            ax_sens.set_title("Estabilidade do Ranking vs Incerteza")
-            ax_sens.legend(fontsize=8)
-            ax_sens.grid(True, linestyle="--", alpha=0.5)
-            st.pyplot(fig_sens)
-
-        st.divider()
-
-        # =========================================================
-        # CENÁRIO 2: ANÁLISE DE ROBUSTEZ DA VANTAGEM (MARGEM DE DOMINÂNCIA)
-        # =========================================================
-        st.markdown("#### 2. Diagnóstico Automático de Estabilidade")
-        
-        # Pega resultado original
-        res_orig = st.session_state["ultimo_resultado"]
-        mi_scores = res_orig["M_i"]
-        indices_ordenados = np.argsort(mi_scores)[::-1]
-        
-        top1_idx, top2_idx = indices_ordenados[0], indices_ordenados[1]
-        top1_nome, top2_nome = nomes_alt_globais[top1_idx], nomes_alt_globais[top2_idx]
-        folga = mi_scores[top1_idx] - mi_scores[top2_idx]
-
-        if folga > 0.10:
-            st.success(f"🟢 **Alta Estabilidade:** A alternativa **{top1_nome}** possui uma vantagem sólida de **{folga*100:.2f}%** em relação à 2ª colocada (**{top2_nome}**). O resultado é muito robusto a perturbações.")
-        elif folga > 0.03:
-            st.warning(f"🟡 **Moderada Estabilidade:** A alternativa **{top1_nome}** lidera com folga de **{folga*100:.2f}%** sobre **{top2_nome}**. Mudanças drásticas nas preferências dos decisores podem alterar o ranking.")
-        else:
-            st.error(f"🔴 **Sensibilidade Alta (Empate Técnico):** A diferença entre **{top1_nome}** e **{top2_nome}** é de apenas **{folga*100:.2f}%**. Recomenda-se reavaliar os critérios de menor peso ou buscar consenso entre os decisores.")
-
 with tab_app:
     matrizes_dms = []
     ordens_dms = []
     perfis_dms = []
-    nomes_dms = []
+    nomes_dms_finais = []
 
-    st.markdown("### 📋 Coleta de Dados e Preferências por Decisor")
+    st.markdown("### **Painel de Entrada de Dados dos Decisores**")
 
-    for d in range(n_dms):
-        nome_dm = f"Decisor {d+1}"
-        nomes_dms.append(nome_dm)
+    abas_dms = st.tabs([f"Decisor {d+1}" for d in range(n_dms)])
 
-        with st.expander(f"👤 {nome_dm}", expanded=(d == 0)):
+    opcoes_eixo_1 = [
+        "Otimista",
+        "Progressista",
+        "Neutro",
+        "Racional",
+        "Pessimista",
+    ]
+    opcoes_eixo_2 = ["Conservador", "Moderado", "Agressivo"]
+
+    for d, aba in enumerate(abas_dms):
+        with aba:
+            col_id1, col_id2 = st.columns([1, 2])
+            with col_id1:
+                nome_dm = st.text_input(
+                    f"Identificação do Decisor {d+1}:",
+                    value=f"Decisor {d+1}",
+                    key=f"nome_dm_input_{d}",
+                )
+                nomes_dms_finais.append(nome_dm)
+
+            st.markdown(f"#### **Perfil Estratégico do {nome_dm}**")
             col_p1, col_p2 = st.columns(2)
             with col_p1:
-                eixo1 = st.selectbox(
-                    "Perfil Comportamental (Eixo 1):",
-                    ["Otimista", "Pessimista", "Progressista", "Racional"],
-                    index=0,
-                    key=f"eixo1_dm_{d}",
+                perfil_1 = st.selectbox(
+                    f"Eixo 1 (Tendência) - {nome_dm}:",
+                    opcoes_eixo_1,
+                    index=0 if d % 2 == 0 else 1,
+                    key=f"dm_perfil_e1_{d}",
                 )
             with col_p2:
-                eixo2 = st.selectbox(
-                    "Postura de Risco (Eixo 2):",
-                    ["Conservador", "Agressivo", "Neutro"],
-                    index=2,
-                    key=f"eixo2_dm_{d}",
+                perfil_2 = st.selectbox(
+                    f"Eixo 2 (Comportamento) - {nome_dm}:",
+                    opcoes_eixo_2,
+                    index=0,
+                    key=f"dm_perfil_e2_{d}",
                 )
-            perfis_dms.append((eixo1, eixo2))
 
-            st.markdown("**Ordenação de Importância dos Critérios (ROC)**")
-            criterios_disponiveis = list(nomes_crit_globais)
-            ordem_nomes = []
+            perfis_dms.append((perfil_1, perfil_2))
+            st.divider()
 
-            cols_roc = st.columns(min(n_crit, 4))
-            for k in range(n_crit):
-                col_idx = k % 4
-                with cols_roc[col_idx]:
-                    opcoes = [
-                        c for c in criterios_disponiveis if c not in ordem_nomes
-                    ]
-                    sel = st.selectbox(
-                        f"{k+1}º Mais Importante",
-                        options=opcoes,
-                        key=f"roc_dm_{d}_rank_{k}",
-                    )
-                    ordem_nomes.append(sel)
-
-            ordem_indices = [nomes_crit_globais.index(c) for c in ordem_nomes]
-            ordens_dms.append(ordem_indices)
-
-            st.markdown(
-                f"**Matriz de Avaliação das Alternativas (Escala 0 a {int(val_max)})**"
-            )
-
-            data_matriz = {}
-            for c_idx, c_nome in enumerate(nomes_crit_globais):
-                t_label = (
-                    " [Custo]"
-                    if tipos_crit_globais[c_idx] == "Custo"
-                    else " [Benefício]"
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.markdown(f"#### **Matriz de Avaliação de Alternativas**")
+                valores_iniciais = np.round(
+                    np.random.rand(n_alt, n_crit) * val_max, 2
                 )
-                vals = []
-                for a_idx, a_nome in enumerate(nomes_alt_globais):
-                    v_def = float(
-                        st.session_state.get(
-                            f"cell_dm_{d}_{a_idx}_{c_idx}", val_max / 2.0
-                        )
+                df_init = pd.DataFrame(
+                    valores_iniciais,
+                    columns=nomes_crit_globais,
+                    index=nomes_alt_globais,
+                )
+
+                df_editada = st.data_editor(
+                    df_init, key=f"matriz_indiv_{d}_v2"
+                )
+                matrizes_dms.append(df_editada.values)
+
+            with col2:
+                st.markdown("#### **Ordenação de Preferência (ROC)**")
+                st.caption("Selecione a ordem de importância dos critérios (1º = mais importante):")
+                ordem_indices = []
+                criterios_disponiveis = list(range(n_crit))
+                
+                for r in range(n_crit):
+                    crit_selecionado_idx = st.selectbox(
+                        f"{r+1}º Lugar de Importância:",
+                        options=criterios_disponiveis,
+                        format_func=lambda x: nomes_crit_globais[x],
+                        key=f"dm_{d}_rank_{r}",
                     )
-                    vals.append(v_def)
-                data_matriz[f"{c_nome}{t_label}"] = vals
-
-            df_input = pd.DataFrame(data_matriz, index=nomes_alt_globais)
-            df_edited = st.data_editor(
-                df_input,
-                key=f"editor_dm_{d}",
-                use_container_width=True,
-            )
-
-            matriz_dm = df_edited.values
-            matrizes_dms.append(matriz_dm)
+                    ordem_indices.append(crit_selecionado_idx)
+                
+                ordens_dms.append(ordem_indices)
 
     st.markdown("---")
-    btn_calcular = st.button("🚀 Processar Análise Multicritério e Gerar Diagnóstico")
-
-    if btn_calcular:
-        with st.spinner("Processando simulações de Monte Carlo..."):
-            res = executar_cpp_roc_choice(
-                matrizes_dms=matrizes_dms,
-                ordens_criterios_dms=ordens_dms,
-                perfis_dms=perfis_dms,
-                tipos_criterios=tipos_crit_globais,
-                val_max=val_max,
-                pct_incerteza=pct_incerteza,
-                n_simulacoes=n_simulacoes,
-            )
-
-            st.session_state["ultimo_resultado"] = res
-            st.session_state["calculo_executado"] = True
+    if st.button("🚀 EXECUTAR ANÁLISE DE DECISÃO", key="btn_executar"):
+        st.session_state["calculo_executado"] = True
 
     if st.session_state.get("calculo_executado", False):
-        res = st.session_state["ultimo_resultado"]
+        res = executar_cpp_roc_choice(
+            matrizes_dms=matrizes_dms,
+            ordens_criterios_dms=ordens_dms,
+            perfis_dms=perfis_dms,
+            tipos_criterios=tipos_crit_globais,
+            val_max=val_max,
+            pct_incerteza=pct_incerteza,
+            n_simulacoes=n_simulacoes,
+        )
 
-        st.markdown("### 📊 Resultados Globais Agregados")
+        st.session_state["ultimo_resultado"] = res
 
         df_res = pd.DataFrame(
             {
@@ -1090,72 +1005,81 @@ with tab_app:
         opt_max_nome = nomes_alt_globais[res["otima_max_Mi"]]
         opt_min_nome = nomes_alt_globais[res["otima_min_mi"]]
 
-        st.markdown(
-            f"""
-            <div class="recommendation-card">
-                <h4 style="margin: 0; color: #166534;">🏆 Recomendação do Sistema</h4>
-                <p style="margin: 5px 0 0 0; color: #15803d; font-size: 14px;">
-                    A alternativa indicada para a problemática de escolha é <b>{opt_max_nome}</b>, apresentando a maior probabilidade de excelência (<b>M<sub>i</sub> = {res['M_i'][res['otima_max_Mi']]:.4f}</b>).
-                    A opção de menor risco absoluto é <b>{opt_min_nome}</b> (<b>m<sub>i</sub> = {res['m_i'][res['otima_min_mi']]:.4f}</b>).
-                </p>
-            </div>
-        """,
-            unsafe_allow_html=True,
-        )
-
-        col_r1, col_r2 = st.columns([1, 1.2])
-
+        st.markdown("### **Resultados do Processo Decisório**")
+        
+        col_r1, col_r2 = st.columns(2)
         with col_r1:
-            st.dataframe(
-                df_res.style.highlight_max(
-                    subset=["Mi (Probabilidade de Excelência)"],
-                    color="#dcfce7",
-                ).highlight_min(
-                    subset=["m_i (Probabilidade de Pior Desempenho)"],
-                    color="#fee2e2",
-                ),
-                use_container_width=True,
-                hide_index=True,
+            st.markdown(
+                f"""
+            <div class="recommendation-card">
+                <h4 style="margin:0; color:#16a34a;">🏆 Recomendação Principal (Maximotimizador)</h4>
+                <p style="margin:5px 0 0 0; font-size:16px;"><b>{opt_max_nome}</b></p>
+                <span style="font-size:12px; color:#15803d;">Maior probabilidade agregada de excelência (M<sub>i</sub> = {res['M_i'][res['otima_max_Mi']]:.4f})</span>
+            </div>
+            """,
+                unsafe_allow_html=True,
+            )
+        with col_r2:
+            st.markdown(
+                f"""
+            <div class="recommendation-card" style="background-color:#eff6ff; border-color:#bfdbfe; border-left-color:#2563eb;">
+                <h4 style="margin:0; color:#1d4ed8;">🛡️ Opção de Menor Risco (Conservadora)</h4>
+                <p style="margin:5px 0 0 0; font-size:16px;"><b>{opt_min_nome}</b></p>
+                <span style="font-size:12px; color:#1e40af;">Menor probabilidade de pior desempenho (m<sub>i</sub> = {res['m_i'][res['otima_min_mi']]:.4f})</span>
+            </div>
+            """,
+                unsafe_allow_html=True,
             )
 
-        with col_r2:
-            buf_fig = gerar_grafico_membro(df_res, para_impressao=False)
-            st.image(buf_fig, use_column_width=True)
+        st.dataframe(df_res.style.highlight_max(subset=["Mi (Probabilidade de Excelência)"], color="#dcfce7"), use_container_width=True)
 
-        st.markdown("---")
-        st.markdown("### 📄 Exportação de Relatório Executivo")
+        col_g1, col_g2 = st.columns([2, 1])
+        with col_g1:
+            fig_buf = gerar_grafico_membro(df_res)
+            st.image(fig_buf, caption="Distribuição de Probabilidades M_i vs m_i por Alternativa", use_container_width=True)
 
-        pdf_bytes = gerar_pdf_relatorio(
-            df_resultados=df_res,
-            resultado_completo=res,
-            opt_max_nome=opt_max_nome,
-            opt_min_nome=opt_min_nome,
-            n_dms=n_dms,
-            n_alt=n_alt,
-            n_crit=n_crit,
-            nomes_criterios=nomes_crit_globais,
-            tipos_criterios=tipos_crit_globais,
-            nomes_dms=nomes_dms,
-            empresa_nome=st.session_state.get("emp_nome", ""),
-            empresa_cnpj=st.session_state.get("emp_cnpj", ""),
-            empresa_contato=st.session_state.get("emp_contato", ""),
-            empresa_cep=st.session_state.get("cep_formatado", ""),
-            empresa_end=st.session_state.get("emp_end", ""),
-            empresa_link=st.session_state.get("emp_link", ""),
-            logo_file=logo_file,
-        )
+        with col_g2:
+            st.markdown("#### **Ações de Exportação**")
+            
+            pdf_bytes = gerar_pdf_relatorio(
+                df_resultados=df_res,
+                resultado_completo=res,
+                opt_max_nome=opt_max_nome,
+                opt_min_nome=opt_min_nome,
+                n_dms=n_dms,
+                n_alt=n_alt,
+                n_crit=n_crit,
+                nomes_criterios=nomes_crit_globais,
+                tipos_criterios=tipos_crit_globais,
+                nomes_dms=nomes_dms_finais,
+                empresa_nome=st.session_state.get("emp_nome", ""),
+                empresa_cnpj=st.session_state.get("emp_cnpj", ""),
+                empresa_contato=st.session_state.get("emp_contato", ""),
+                empresa_cep=st.session_state.get("cep_formatado", ""),
+                empresa_end=st.session_state.get("emp_end", ""),
+                empresa_link=st.session_state.get("emp_link", ""),
+                logo_file=logo_file,
+            )
 
-        st.download_button(
-            label="📥 Baixar Relatório em PDF (A4)",
-            data=pdf_bytes,
-            file_name=f"Relatorio_CPP_ROC_CHOICE_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-            mime="application/pdf",
-        )
+            st.download_button(
+                label="📄 Baixar Relatório Completo em PDF",
+                data=pdf_bytes,
+                file_name=f"relatorio_decisao_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                mime="application/pdf",
+                key="btn_pdf",
+            )
+
+with tab_sens:
+    st.markdown("### **Análise de Sensibilidade Estocástica**")
+    if st.session_state.get("calculo_executado", False):
+        st.info("Execute simulações com diferentes níveis de variação e Monte Carlo na barra lateral para avaliar a estabilidade dos resultados.")
+    else:
+        st.warning("Por favor, execute o cálculo no 'Painel de Avaliação' primeiro.")
 
 st.markdown(
     """
     <div class="footer-rights">
-        DSS CPP-ROC CHOICE — Desenvolvido por <a href="https://www.instagram.com/rise.ufal/" target="_blank">RISE / UFAL</a> © Todos os direitos reservados.
+        DSS CPP-ROC CHOICE — Desenvolvido por <a href="https://www.instagram.com/rise.ufal/" target="_blank">RISE/UFAL</a> © Todos os direitos reservados.
     </div>
 """,
     unsafe_allow_html=True,
