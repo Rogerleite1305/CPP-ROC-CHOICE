@@ -655,6 +655,7 @@ st.set_page_config(
     page_title="DSS | CPP-ROC CHOICE", page_icon="📈", layout="wide"
 )
 
+# ESTILIZAÇÃO CSS COM O RÓTULO EM AZUL ESCURO NO RODAPÉ
 st.markdown(
     """
     <style>
@@ -672,21 +673,37 @@ st.markdown(
         border-radius: 8px;
         margin-bottom: 20px;
     }
-    .footer-rights {
-        text-align: center;
-        color: #64748b;
-        font-size: 12px;
-        padding: 20px 0 10px 0;
-        border-top: 1px solid #e2e8f0;
-        margin-top: 40px;
+    .recommendation-card-risk {
+        background-color: #fef2f2;
+        border: 1px solid #fecaca;
+        border-left: 5px solid #dc2626;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 20px;
     }
-    .footer-rights a {
-        color: #2563eb;
-        text-decoration: none;
+    
+    /* RÓTULO AZUL ESCURO DO RODAPÉ RESTAURADO */
+    .footer-dark-card {
+        background-color: #0f172a;
+        color: #ffffff;
+        padding: 16px 20px;
+        border-radius: 8px;
+        text-align: center;
+        font-size: 13px;
+        margin-top: 40px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+    .footer-dark-card p {
+        margin: 0;
+        color: #e2e8f0;
+    }
+    .footer-dark-card a {
+        color: #60a5fa !important;
+        text-decoration: underline;
         font-weight: 600;
     }
-    .footer-rights a:hover {
-        text-decoration: underline;
+    .footer-dark-card a:hover {
+        color: #93c5fd !important;
     }
     </style>
 """,
@@ -965,7 +982,7 @@ with tab_app:
                 st.caption("Selecione a ordem de importância dos critérios (1º = mais importante):")
                 ordem_indices = []
                 criterios_disponiveis = list(range(n_crit))
-                
+
                 for r in range(n_crit):
                     crit_selecionado_idx = st.selectbox(
                         f"{r+1}º Lugar de Importância:",
@@ -974,7 +991,7 @@ with tab_app:
                         key=f"dm_{d}_rank_{r}",
                     )
                     ordem_indices.append(crit_selecionado_idx)
-                
+
                 ordens_dms.append(ordem_indices)
 
     st.markdown("---")
@@ -1006,7 +1023,7 @@ with tab_app:
         opt_min_nome = nomes_alt_globais[res["otima_min_mi"]]
 
         st.markdown("### **Resultados do Processo Decisório**")
-        
+
         col_r1, col_r2 = st.columns(2)
         with col_r1:
             st.markdown(
@@ -1014,7 +1031,7 @@ with tab_app:
             <div class="recommendation-card">
                 <h4 style="margin:0; color:#16a34a;">🏆 Recomendação Principal (Maximotimizador)</h4>
                 <p style="margin:5px 0 0 0; font-size:16px;"><b>{opt_max_nome}</b></p>
-                <span style="font-size:12px; color:#15803d;">Maior probabilidade agregada de excelência (M<sub>i</sub> = {res['M_i'][res['otima_max_Mi']]:.4f})</span>
+                <p style="margin:2px 0 0 0; font-size:12px; color:#15803d;">Maior probabilidade de excelência acumulada (M_i = {res['M_i'][res['otima_max_Mi']]:.4f})</p>
             </div>
             """,
                 unsafe_allow_html=True,
@@ -1022,64 +1039,88 @@ with tab_app:
         with col_r2:
             st.markdown(
                 f"""
-            <div class="recommendation-card" style="background-color:#eff6ff; border-color:#bfdbfe; border-left-color:#2563eb;">
-                <h4 style="margin:0; color:#1d4ed8;">🛡️ Opção de Menor Risco (Conservadora)</h4>
+            <div class="recommendation-card-risk">
+                <h4 style="margin:0; color:#dc2626;">🛡️ Opção Conservadora (Menor Risco)</h4>
                 <p style="margin:5px 0 0 0; font-size:16px;"><b>{opt_min_nome}</b></p>
-                <span style="font-size:12px; color:#1e40af;">Menor probabilidade de pior desempenho (m<sub>i</sub> = {res['m_i'][res['otima_min_mi']]:.4f})</span>
+                <p style="margin:2px 0 0 0; font-size:12px; color:#b91c1c;">Menor índice de vulnerabilidade / pior caso (m_i = {res['m_i'][res['otima_min_mi']]:.4f})</p>
             </div>
             """,
                 unsafe_allow_html=True,
             )
 
-        st.dataframe(df_res.style.highlight_max(subset=["Mi (Probabilidade de Excelência)"], color="#dcfce7"), use_container_width=True)
+        st.dataframe(
+            df_res.style.highlight_max(
+                subset=["Mi (Probabilidade de Excelência)"], color="#dcfce7"
+            ),
+            use_container_width=True,
+        )
 
-        col_g1, col_g2 = st.columns([2, 1])
-        with col_g1:
-            fig_buf = gerar_grafico_membro(df_res)
-            st.image(fig_buf, caption="Distribuição de Probabilidades M_i vs m_i por Alternativa", use_container_width=True)
+        st.markdown("#### **Análise Gráfica**")
+        fig_buf = gerar_grafico_membro(df_res, para_impressao=False)
+        st.image(fig_buf, use_container_width=True)
 
-        with col_g2:
-            st.markdown("#### **Ações de Exportação**")
-            
-            pdf_bytes = gerar_pdf_relatorio(
-                df_resultados=df_res,
-                resultado_completo=res,
-                opt_max_nome=opt_max_nome,
-                opt_min_nome=opt_min_nome,
-                n_dms=n_dms,
-                n_alt=n_alt,
-                n_crit=n_crit,
-                nomes_criterios=nomes_crit_globais,
-                tipos_criterios=tipos_crit_globais,
-                nomes_dms=nomes_dms_finais,
-                empresa_nome=st.session_state.get("emp_nome", ""),
-                empresa_cnpj=st.session_state.get("emp_cnpj", ""),
-                empresa_contato=st.session_state.get("emp_contato", ""),
-                empresa_cep=st.session_state.get("cep_formatado", ""),
-                empresa_end=st.session_state.get("emp_end", ""),
-                empresa_link=st.session_state.get("emp_link", ""),
-                logo_file=logo_file,
-            )
+        # EXPORTAÇÃO PDF LOGO ABAIXO DO GRÁFICO
+        st.markdown("---")
+        st.markdown("#### **📄 Exportação de Resultados**")
+        pdf_bytes = gerar_pdf_relatorio(
+            df_resultados=df_res,
+            resultado_completo=res,
+            opt_max_nome=opt_max_nome,
+            opt_min_nome=opt_min_nome,
+            n_dms=n_dms,
+            n_alt=n_alt,
+            n_crit=n_crit,
+            nomes_criterios=nomes_crit_globais,
+            tipos_criterios=tipos_crit_globais,
+            nomes_dms=nomes_dms_finais,
+            empresa_nome=st.session_state.get("emp_nome", ""),
+            empresa_cnpj=st.session_state.get("emp_cnpj", ""),
+            empresa_contato=st.session_state.get("emp_contato", ""),
+            empresa_cep=st.session_state.get("cep_formatado", ""),
+            empresa_end=st.session_state.get("emp_end", ""),
+            empresa_link=st.session_state.get("emp_link", ""),
+            logo_file=logo_file,
+        )
 
-            st.download_button(
-                label="📄 Baixar Relatório Completo em PDF",
-                data=pdf_bytes,
-                file_name=f"relatorio_decisao_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-                mime="application/pdf",
-                key="btn_pdf",
-            )
+        st.download_button(
+            label="📥 Baixar Relatório Executivo Completo em PDF",
+            data=pdf_bytes,
+            file_name=f"Relatorio_CPP_ROC_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            mime="application/pdf",
+            key="btn_download_pdf",
+        )
 
 with tab_sens:
-    st.markdown("### **Análise de Sensibilidade Estocástica**")
-    if st.session_state.get("calculo_executado", False):
-        st.info("Execute simulações com diferentes níveis de variação e Monte Carlo na barra lateral para avaliar a estabilidade dos resultados.")
+    st.markdown("### **Análise de Sensibilidade**")
+    if not st.session_state.get("calculo_executado", False):
+        st.info("Execute a análise na aba 'Painel de Avaliação' para habilitar a análise de sensibilidade.")
     else:
-        st.warning("Por favor, execute o cálculo no 'Painel de Avaliação' primeiro.")
+        st.markdown("Varie os parâmetros para observar o comportamento da robustez decisória:")
+        sens_incerteza = st.slider("Variação do Nível de Incerteza (%)", 1, 50, int(pct_incerteza * 100))
+        if st.button("Re-simular Sensibilidade"):
+            res_sens = executar_cpp_roc_choice(
+                matrizes_dms=matrizes_dms,
+                ordens_criterios_dms=ordens_dms,
+                perfis_dms=perfis_dms,
+                tipos_criterios=tipos_crit_globais,
+                val_max=val_max,
+                pct_incerteza=sens_incerteza / 100.0,
+                n_simulacoes=n_simulacoes,
+            )
+            df_sens = pd.DataFrame(
+                {
+                    "Alternativa": nomes_alt_globais,
+                    "Mi (Sensibilidade)": res_sens["M_i"],
+                    "mi (Sensibilidade)": res_sens["m_i"],
+                }
+            )
+            st.dataframe(df_sens, use_container_width=True)
 
+# RODAPÉ ESTILIZADO EM CAIXA AZUL ESCURO (0f172a)
 st.markdown(
     """
-    <div class="footer-rights">
-        DSS CPP-ROC CHOICE — Desenvolvido por <a href="https://www.instagram.com/rise.ufal/" target="_blank">RISE/UFAL</a> © Todos os direitos reservados.
+    <div class="footer-dark-card">
+        <p><b>DSS CPP-ROC CHOICE</b> — Desenvolvido por <a href="https://www.instagram.com/rise.ufal/" target="_blank">RISE / UFAL</a> © Todos os direitos reservados.</p>
     </div>
 """,
     unsafe_allow_html=True,
