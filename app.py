@@ -1,4 +1,5 @@
 import base64
+import datetime
 import io
 import re
 import matplotlib.pyplot as plt
@@ -8,9 +9,11 @@ from PIL import Image
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.pdfgen import canvas
 from reportlab.platypus import (
     HRFlowable,
     Image as RLImage,
+    KeepTogether,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -20,6 +23,55 @@ from reportlab.platypus import (
 import requests
 from scipy.stats import triang
 import streamlit as st
+
+# ==========================================
+# 0. CLASSE NUMBERED CANVAS (PAGINAÇÃO DINÂMICA)
+# ==========================================
+
+
+class NumberedCanvas(canvas.Canvas):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._saved_page_states = []
+
+    def showPage(self):
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        num_pages = len(self._saved_page_states)
+        for state in self._saved_page_states:
+            self.__dict__.update(state)
+            self.draw_page_number(num_pages)
+            super().showPage()
+        super().save()
+
+    def draw_page_number(self, page_count):
+        self.saveState()
+        self.setFont("Helvetica", 8)
+        self.setFillColor(colors.HexColor("#475569"))
+
+        # Rodapé com data/hora e numeração
+        data_hora = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        texto_rodape = (
+            f"Relatório Gerado em: {data_hora} | Página {self._pageNumber} de {page_count}"
+        )
+
+        self.drawRightString(A4[0] - 36, 20, texto_rodape)
+        self.drawString(
+            36,
+            20,
+            "DSS CPP-ROC CHOICE — Documento Confidencial de Apoio à Decisão",
+        )
+
+        # Linha divisória do rodapé
+        self.setStrokeColor(colors.HexColor("#cbd5e1"))
+        self.setLineWidth(0.5)
+        self.line(36, 32, A4[0] - 36, 32)
+
+        self.restoreState()
+
 
 # ==========================================
 # 1. FUNÇÕES AUXILIARES
@@ -103,7 +155,7 @@ def callback_atualizar_cep():
 
 
 # ==========================================
-# 2. MOTOR MATEMÁTICO COM RASTREABILIDADE (CPP-ROC)
+# 2. MOTOR MATEMÁTICO COM NORMALIZAÇÃO & CUSTO
 # ==========================================
 
 
@@ -116,24 +168,72 @@ def calcular_pesos_roc(n_criterios):
     return pesos
 
 
+def obter_fatores_perfil(
+    perfil_eixo1, perfil_eixo2, pct_incerteza_base=0.10
+):
+    fator_inf = 1.0 - pct_incerteza_base
+    fator_sup = 1.0 + pct_incerteza_base
+
+    if perfil_eixo1 == "Otimista":
+        fator_sup += 0.05
+    elif perfil_eixo1 == "Pessimista":
+        fator_inf -= 0.05
+    elif perfil_eixo1 == "Progressista":
+        fator_sup += 0.10
+    elif perfil_eixo1 == "Racional":
+        fator_inf = max(0.01, 1.0 - (pct_incerteza_base / 2))
+        fator_sup = 1.0 + (pct_incerteza_base / 2)
+
+    if perfil_eixo2 == "Conservador":
+        fator_inf = max(0.01, fator_inf - 0.05)
+    elif perfil_eixo2 == "Agressivo":
+        fator_sup += 0.05
+
+    return fator_inf, fator_sup
+
+
+def normalizar_matriz_avaliacao(matriz, tipos_criterios, val_max=1.0):
+    """
+    Normaliza a matriz para o intervalo [0, 1] e inverte critérios do tipo 'Custo'.
+    """
+    matriz_norm = np.array(matriz, dtype=float) / float(val_max)
+    n_alt, n_crit = matriz_norm.shape
+
+    for c in range(n_crit):
+        tipo = tipos_criterios[c]
+        if tipo == "Custo":
+            # Inversão para Critérios de Custo (Menor é melhor -> vira Maior é melhor)
+            matriz_norm[:, c] = 1.0 - matriz_norm[:, c]
+
+    # Garante limites estritos [0, 1]
+    matriz_norm = np.clip(matriz_norm, 0.0, 1.0)
+    return matriz_norm
+
+
 @st.cache_data(show_spinner=False)
-def estimar_probabilidades_cpp(matriz_avaliacoes, val_max=1.0, n_simulacoes=5000):
-    n_alt, n_crit = matriz_avaliacoes.shape
+def estimar_probabilidades_cpp_custom(
+    matriz_norm, fator_inf, fator_sup, n_simulacoes=5000
+):
+    n_alt, n_crit = matriz_norm.shape
     M_ij = np.zeros((n_alt, n_crit))
     m_ij = np.zeros((n_alt, n_crit))
 
     for c in range(n_crit):
-        valores = matriz_avaliacoes[:, c]
+        valores = matriz_norm[:, c]
         amostras = np.zeros((n_alt, n_simulacoes))
 
         for a in range(n_alt):
             c_val = valores[a]
-            a_min = max(0.0, c_val * 0.9) if c_val > 0 else 0.0
-            b_max = min(val_max, c_val * 1.1) if c_val < val_max else val_max
-            if a_min == b_max:
-                b_max += 1e-5
+            a_min = max(0.0, c_val * fator_inf) if c_val > 0 else 0.0
+            b_max = min(1.0, c_val * fator_sup) if c_val < 1.0 else 1.0
+
+            if a_min >= b_max:
+                b_max = min(1.0, a_min + 1e-4)
+
             scale = b_max - a_min
             c_param = (c_val - a_min) / scale if scale > 0 else 0.5
+            c_param = np.clip(c_param, 1e-4, 0.9999)
+
             amostras[a, :] = triang.rvs(
                 c_param, loc=a_min, scale=scale, size=n_simulacoes
             )
@@ -148,7 +248,15 @@ def estimar_probabilidades_cpp(matriz_avaliacoes, val_max=1.0, n_simulacoes=5000
     return M_ij, m_ij
 
 
-def executar_cpp_roc_choice(matrizes_dms, ordens_criterios_dms, val_max=1.0):
+def executar_cpp_roc_choice(
+    matrizes_dms,
+    ordens_criterios_dms,
+    perfis_dms,
+    tipos_criterios,
+    val_max=1.0,
+    pct_incerteza=0.10,
+    n_simulacoes=5000,
+):
     n_dms = len(matrizes_dms)
     n_alt, n_crit = matrizes_dms[0].shape
 
@@ -158,15 +266,29 @@ def executar_cpp_roc_choice(matrizes_dms, ordens_criterios_dms, val_max=1.0):
     detalhes_dms = []
 
     for d in range(n_dms):
-        matriz = np.array(matrizes_dms[d])
+        matriz_bruta = np.array(matrizes_dms[d])
+        matriz_norm = normalizar_matriz_avaliacao(
+            matriz_bruta, tipos_criterios, val_max=val_max
+        )
+
         ordem = ordens_criterios_dms[d]
+        eixo1, eixo2 = perfis_dms[d]
+
+        fator_inf, fator_sup = obter_fatores_perfil(
+            eixo1, eixo2, pct_incerteza_base=pct_incerteza
+        )
 
         pesos_roc_base = calcular_pesos_roc(n_crit)
         pesos_ordenados = np.zeros(n_crit)
         for rank, crit_idx in enumerate(ordem):
             pesos_ordenados[crit_idx] = pesos_roc_base[rank]
 
-        M_ij, m_ij = estimar_probabilidades_cpp(matriz, val_max=val_max)
+        M_ij, m_ij = estimar_probabilidades_cpp_custom(
+            matriz_norm,
+            fator_inf,
+            fator_sup,
+            n_simulacoes=n_simulacoes,
+        )
 
         M_dm_contribuicao = np.zeros(n_alt)
         m_dm_contribuicao = np.zeros(n_alt)
@@ -180,7 +302,9 @@ def executar_cpp_roc_choice(matrizes_dms, ordens_criterios_dms, val_max=1.0):
         detalhes_dms.append(
             {
                 "decisor": d + 1,
+                "perfil": f"{eixo1} - {eixo2}",
                 "pesos_criterios": pesos_ordenados,
+                "matriz_norm": matriz_norm,
                 "M_ij": M_ij,
                 "m_ij": m_ij,
                 "M_contribuicao": M_dm_contribuicao,
@@ -203,8 +327,11 @@ def executar_cpp_roc_choice(matrizes_dms, ordens_criterios_dms, val_max=1.0):
     }
 
 
-def gerar_grafico_membro(df_resultados):
-    fig, ax = plt.subplots(figsize=(6.5, 2.6), dpi=200)
+def gerar_grafico_membro(df_resultados, para_impressao=False):
+    figsize = (6.5, 3.2) if not para_impressao else (6.5, 2.5)
+    dpi = 300 if para_impressao else 150
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
     x = np.arange(len(df_resultados))
     largura = 0.35
 
@@ -212,21 +339,23 @@ def gerar_grafico_membro(df_resultados):
         x - largura / 2,
         df_resultados["Mi (Probabilidade de Excelência)"],
         largura,
-        label="Mi (Excelência)",
+        label="Mi (Excelência / Dominância)",
         color="#2563eb",
     )
     ax.bar(
         x + largura / 2,
         df_resultados["m_i (Probabilidade de Pior Desempenho)"],
         largura,
-        label="m_i (Pior Desempenho)",
+        label="mi (Pior Desempenho / Risco)",
         color="#ef4444",
     )
 
-    ax.set_ylabel("Probabilidade Agregada", fontsize=8)
+    ax.set_ylabel("Probabilidade Agregada", fontsize=9)
     ax.set_xticks(x)
-    ax.set_xticklabels(df_resultados["Alternativa"], fontsize=8)
-    ax.legend(fontsize=8)
+    ax.set_xticklabels(
+        df_resultados["Alternativa"], fontsize=8, rotation=0, ha="center"
+    )
+    ax.legend(fontsize=8, loc="upper right")
     ax.grid(axis="y", linestyle="--", alpha=0.3)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -240,7 +369,7 @@ def gerar_grafico_membro(df_resultados):
 
 
 # ==========================================
-# 3. GERADOR DE RELATÓRIO PDF A4
+# 3. GERADOR DE RELATÓRIO PDF A4 COM REPORTLAB
 # ==========================================
 
 
@@ -253,6 +382,7 @@ def gerar_pdf_relatorio(
     n_alt,
     n_crit,
     nomes_criterios,
+    tipos_criterios,
     nomes_dms,
     empresa_nome,
     empresa_cnpj,
@@ -269,7 +399,7 @@ def gerar_pdf_relatorio(
         rightMargin=36,
         leftMargin=36,
         topMargin=36,
-        bottomMargin=36,
+        bottomMargin=45,
     )
     elements = []
 
@@ -277,23 +407,23 @@ def gerar_pdf_relatorio(
     title_style = ParagraphStyle(
         "DocTitle",
         parent=styles["Heading1"],
-        fontSize=16,
+        fontSize=14,
         textColor=colors.HexColor("#0f172a"),
-        spaceAfter=4,
+        spaceAfter=3,
     )
     subtitle_style = ParagraphStyle(
         "DocSubTitle",
         parent=styles["Normal"],
-        fontSize=9,
+        fontSize=8,
         textColor=colors.HexColor("#475569"),
-        spaceAfter=10,
+        spaceAfter=8,
     )
     section_style = ParagraphStyle(
         "SectionHeading",
         parent=styles["Heading2"],
-        fontSize=11,
+        fontSize=10,
         textColor=colors.HexColor("#1e293b"),
-        spaceBefore=8,
+        spaceBefore=6,
         spaceAfter=4,
     )
     analise_style = ParagraphStyle(
@@ -311,12 +441,13 @@ def gerar_pdf_relatorio(
         leading=10,
     )
 
+    # CABEÇALHO DO DOCUMENTO
     elements.append(
         Paragraph("RELATÓRIO EXECUTIVO DE TOMADA DE DECISÃO", title_style)
     )
     elements.append(
         Paragraph(
-            "SISTEMA CPP-ROC CHOICE | RASTREABILIDADE E MEMÓRIA DE CÁLCULO",
+            "SISTEMA CPP-ROC CHOICE | MODELAGEM MULTICRITÉRIO SOB INCERTEZA ESTOCÁSTICA",
             subtitle_style,
         )
     )
@@ -329,6 +460,7 @@ def gerar_pdf_relatorio(
         )
     )
 
+    # 1. TABELA DE RECOMENDAÇÃO TÉCNICA
     sorted_mi = np.sort(df_resultados["Mi (Probabilidade de Excelência)"])[
         ::-1
     ]
@@ -372,21 +504,23 @@ def gerar_pdf_relatorio(
     elements.append(t_rec)
     elements.append(Spacer(1, 6))
 
-    elements.append(
-        Paragraph("Análise Gráfica e Diretriz Decisória", section_style)
-    )
-    buf_grafico = gerar_grafico_membro(df_resultados)
-    img_grafico = RLImage(buf_grafico, width=440, height=170)
+    # 2. ANÁLISE GRÁFICA & PROTEÇÃO DE QUEBRA DE PÁGINA (KEEPTOGETHER)
+    buf_grafico = gerar_grafico_membro(df_resultados, para_impressao=True)
+    img_grafico = RLImage(buf_grafico, width=460, height=160)
 
     texto_analitico = f"""
-    <b>Interpretação Executiva:</b><br/>
-    • A alternativa <b>{opt_max_nome}</b> apresenta a maior probabilidade de alcançar o desempenho superior (<i>M<sub>i</sub></i> = {sorted_mi[0]:.4f}).
-    A diferença de <b>{margem_dominancia*100:.2f}%</b> em relação à segunda colocada indica uma preferência estocástica consolidada.<br/>
-    • Para gestores com aversão ao risco, a alternativa <b>{opt_min_nome}</b> oferece a menor probabilidade de falha ou pior desempenho relativo (<i>m<sub>i</sub></i>).
+    <b>Interpretação Executiva para a Problemática de Escolha:</b><br/>
+    • A alternativa recomendada <b>{opt_max_nome}</b> obteve a maior probabilidade agregada de excelência (<i>M<sub>i</sub></i> = {sorted_mi[0]:.4f}) considerando as preferências combinadas dos {n_dms} decisores.<br/>
+    • Sob a ótica de minimização de risco, a alternativa <b>{opt_min_nome}</b> apresentou o menor índice de vulnerabilidade (<i>m<sub>i</sub></i>).
     """
     p_analitico = Paragraph(texto_analitico, analise_style)
 
-    quadro_conteudo = [[img_grafico], [Spacer(1, 3)], [p_analitico]]
+    quadro_conteudo = [
+        [Paragraph("<b>Análise Gráfica e Diretriz Decisória</b>", section_style)],
+        [img_grafico],
+        [Spacer(1, 2)],
+        [p_analitico],
+    ]
     t_quadro = Table(quadro_conteudo, colWidths=[480])
     t_quadro.setStyle(
         TableStyle(
@@ -396,25 +530,34 @@ def gerar_pdf_relatorio(
                 ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#cbd5e1")),
                 ("LEFTPADDING", (0, 0), (-1, -1), 8),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
             ]
         )
     )
-    elements.append(t_quadro)
-    elements.append(Spacer(1, 6))
 
+    # Agrupa a análise gráfica em um bloco para não quebrar a página ao meio
+    elements.append(KeepTogether([t_quadro]))
+    elements.append(Spacer(1, 8))
+
+    # 3. RASTREABILIDADE: ROC E CRITÉRIOS (COM CUSTO/BENEFÍCIO)
     elements.append(
-        Paragraph("Rastreabilidade: Pesos ROC por Decisor", section_style)
+        Paragraph(
+            "Rastreabilidade: Pesos ROC, Perfis e Tipos de Critérios",
+            section_style,
+        )
     )
-    roc_headers = ["Critério"] + [
-        f"{dm} (Peso)" for dm in nomes_dms
-    ] + ["Peso Médio ROC"]
+    roc_headers = (
+        ["Critério", "Tipo"]
+        + [f"{dm}" for dm in nomes_dms]
+        + ["Peso Médio ROC"]
+    )
     roc_rows = [roc_headers]
 
     detalhes = resultado_completo["detalhes_dms"]
     for c_idx, c_nome in enumerate(nomes_criterios):
-        row = [str(c_nome)]
+        c_tipo = tipos_criterios[c_idx]
+        row = [str(c_nome), str(c_tipo)]
         pesos_crit = []
         for d in range(n_dms):
             p_val = detalhes[d]["pesos_criterios"][c_idx]
@@ -423,8 +566,9 @@ def gerar_pdf_relatorio(
         row.append(f"{np.mean(pesos_crit):.4f}")
         roc_rows.append(row)
 
+    col_w_base = 320 // (n_dms + 1)
     t_roc = Table(
-        roc_rows, colWidths=[120] + [360 // (n_dms + 1)] * (n_dms + 1)
+        roc_rows, colWidths=[110, 50] + [col_w_base] * (n_dms + 1)
     )
     t_roc.setStyle(
         TableStyle(
@@ -446,7 +590,7 @@ def gerar_pdf_relatorio(
             ]
         )
     )
-    elements.append(t_roc)
+    elements.append(KeepTogether([t_roc]))
 
     elements.append(Spacer(1, 10))
     elements.append(
@@ -458,6 +602,7 @@ def gerar_pdf_relatorio(
         )
     )
 
+    # EMBEDDING DE IDENTIDADE CORPORATIVA NO RODAPÉ
     logo_cell = ""
     if logo_file:
         try:
@@ -471,7 +616,7 @@ def gerar_pdf_relatorio(
             logo_cell = ""
 
     info_text = (
-        f"<b>{empresa_nome if empresa_nome else 'Empresa Registrada'}</b>"
+        f"<b>{empresa_nome if empresa_nome else 'Organização Registrada'}</b>"
     )
     if empresa_link:
         url_val = (
@@ -479,7 +624,7 @@ def gerar_pdf_relatorio(
             if empresa_link.startswith("http")
             else f"https://{empresa_link}"
         )
-        info_text += f" | <a href='{url_val}' color='#2563eb'><u>Página Oficial / Rede Social</u></a>"
+        info_text += f" | <a href='{url_val}' color='#2563eb'><u>Portal Oficial</u></a>"
 
     info_text += f"<br/><b>CNPJ:</b> {empresa_cnpj if empresa_cnpj else 'Não informado'} | <b>Contato:</b> {empresa_contato if empresa_contato else 'Não informado'}<br/>"
     info_text += f"<b>CEP:</b> {empresa_cep if empresa_cep else 'Não informado'} | <b>Endereço:</b> {empresa_end if empresa_end else 'Não informado'}"
@@ -504,9 +649,10 @@ def gerar_pdf_relatorio(
             ]
         )
     )
-    elements.append(t_footer)
+    elements.append(KeepTogether([t_footer]))
 
-    doc.build(elements)
+    # Geração final do PDF utilizando o NumberedCanvas
+    doc.build(elements, canvasmaker=NumberedCanvas)
     buffer.seek(0)
     return buffer.getvalue()
 
@@ -528,37 +674,14 @@ st.markdown(
     .main-header p { color: #94a3b8; font-size: 13px; margin-top: 4px; margin-bottom: 0; }
     .stButton>button { background-color: #2563eb !important; color: white !important; font-weight: 600 !important; border-radius: 6px !important; border: none !important; width: 100%; }
     
-    .company-card {
-        background-color: #ffffff;
-        border-left: 4px solid #2563eb;
-        padding: 16px;
+    .recommendation-card {
+        background-color: #f0fdf4;
+        border: 1px solid #bbf7d0;
+        border-left: 5px solid #16a34a;
+        padding: 15px;
         border-radius: 8px;
-        margin-top: 30px;
-        margin-bottom: 15px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.04);
-        display: flex;
-        align-items: center;
-        gap: 16px;
+        margin-bottom: 20px;
     }
-    .company-logo-img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid #e2e8f0; }
-    .company-info-container { flex-grow: 1; }
-    .company-header-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-    .company-link-btn {
-        background-color: #eff6ff; color: #2563eb !important; padding: 3px 10px; border-radius: 16px;
-        font-size: 11px; font-weight: 600; text-decoration: none !important; border: 1px solid #bfdbfe;
-    }
-    .company-details-text { margin: 4px 0 0 0; color: #475569; font-size: 12px; line-height: 1.4; }
-    
-    .copyright-footer { 
-        background-color: #0f172a; 
-        color: #94a3b8; 
-        text-align: center; 
-        padding: 12px; 
-        border-radius: 8px; 
-        font-size: 12px; 
-        margin-top: 10px; 
-    }
-    .copyright-footer a { color: #60a5fa; text-decoration: none; font-weight: bold; }
     </style>
 """,
     unsafe_allow_html=True,
@@ -573,217 +696,327 @@ if "emp_cnpj" not in st.session_state:
 if "calculo_executado" not in st.session_state:
     st.session_state["calculo_executado"] = False
 
-# BARRA LATERAL
-st.sidebar.markdown("### **Configuração do Problema**")
-n_dms = st.sidebar.number_input("Quantidade de Decisores (DMs)", 1, 10, 2)
-n_alt = st.sidebar.number_input("Quantidade de Alternativas", 2, 20, 3)
-n_crit = st.sidebar.number_input("Quantidade de Critérios", 2, 10, 3)
+# ==========================================
+# BARRA LATERAL (SIDEBAR)
+# ==========================================
 
-st.sidebar.markdown("#### **Escala de Avaliação**")
-tipo_escala = st.sidebar.selectbox(
-    "Escolha o intervalo da escala:",
-    [
-        "[0, 1] - Normalizada",
-        "[0, 10] - Notas de 0 a 10",
-        "[0, 100] - Porcentagem/Pontos",
-    ],
-    index=0,
-)
-
-if "[0, 10]" in tipo_escala:
-    val_max = 10.0
-    rotulo_matriz = "Matriz de Avaliação [0, 10]"
-elif "[0, 100]" in tipo_escala:
-    val_max = 100.0
-    rotulo_matriz = "Matriz de Avaliação [0, 100]"
-else:
-    val_max = 1.0
-    rotulo_matriz = "Matriz de Avaliação Normalizada [0, 1]"
-
-st.sidebar.markdown("#### **Nomes Globais de Referência**")
-nomes_dms_globais = [
-    st.sidebar.text_input(
-        f"Nome Decisor {d+1}", value=f"Decisor {d+1}", key=f"glob_dm_{d}"
-    )
-    for d in range(n_dms)
-]
-nomes_alt_globais = [
-    st.sidebar.text_input(
-        f"Nome Alt. {a+1}", value=f"Alternativa {a+1}", key=f"glob_alt_{a}"
-    )
-    for a in range(n_alt)
-]
-nomes_crit_globais = [
-    st.sidebar.text_input(
-        f"Nome Crit. {c+1}", value=f"Critério {c+1}", key=f"glob_crit_{c}"
-    )
-    for c in range(n_crit)
-]
-
-st.sidebar.divider()
-
-with st.sidebar.expander(
-    "⚙️ Configurações Visuais e Cadastrais", expanded=False
-):
-    logo_file = st.file_uploader(
-        "Logo da Empresa (Rodapé e PDF)", type=["png", "jpg", "jpeg"], key="logo"
-    )
-
-    st.text_input(
-        "Nome da Empresa",
-        placeholder="Ex: Prefeitura de Maceió",
-        key="emp_nome",
-    )
-    st.text_input(
-        "CNPJ (Numérico ou Alfanumérico)",
-        placeholder="Digite 14 caracteres (ex: 12ABC345000199)",
-        key="emp_cnpj_input",
-        on_change=callback_atualizar_cnpj,
-    )
-    st.text_input("Contato", placeholder="E-mail / Telefone", key="emp_contato")
-    st.text_input(
-        "Link Oficial",
-        placeholder="instagram.com/rise.ufal",
-        key="emp_link",
-    )
-    st.text_input(
-        "CEP",
-        placeholder="Digite o CEP",
-        key="input_cep",
-        on_change=callback_atualizar_cep,
-    )
-    st.text_area("Endereço Completo", key="emp_end")
-
-# EXIBIÇÃO DA LOGO CENTRALIZADA COM LARGURA FIXA
-col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
-with col_l2:
-    try:
-        url_logo_github = "https://raw.githubusercontent.com/Rogerleite1305/CPP-ROC-CHOISE/main/LOGO%20CPP-ROC-CHOICE.png"
-        st.image(url_logo_github, width=230)
-    except Exception:
-        st.warning("Não foi possível carregar a logo oficial do topo.")
-
-# TÍTULO PRINCIPAL E SUBTÍTULO
-st.markdown(
+st.sidebar.markdown(
     """
-    <div class="main-header">
-        <h1>Decision Support System — CPP-ROC-CHOICE</h1>
-        <p>Sistema de Apoio à Decisão Multicritério com Múltiplos Decisores Sob Incerteza</p>
+    <div style="padding-bottom: 10px;">
+        <h3 style="margin: 0; color: #0f172a; font-size: 18px;">⚙️ Configurações</h3>
+        <p style="margin: 0; color: #64748b; font-size: 11px;">Parâmetros do Modelo e Simulação</p>
     </div>
 """,
     unsafe_allow_html=True,
 )
 
-# ABA PRINCIPAL / MANUAL DO MÉTODO
-tab_app, tab_manual = st.tabs(["📊 Painel de Avaliação", "📖 Manual do Método"])
+# BOTAO PARA CARREGAR DADOS DE EXEMPLO
+if st.sidebar.button("💡 Carregar Exemplo Prático"):
+    st.session_state["cfg_n_dms"] = 2
+    st.session_state["cfg_n_crit"] = 3
+    st.session_state["cfg_n_alt"] = 3
+    st.session_state["glob_alt_0"] = "Fornecedor Alfa"
+    st.session_state["glob_alt_1"] = "Fornecedor Beta"
+    st.session_state["glob_alt_2"] = "Fornecedor Gama"
+    st.session_state["glob_crit_0"] = "Custo Total"
+    st.session_state["glob_crit_1"] = "Qualidade Técnica"
+    st.session_state["glob_crit_2"] = "Prazo de Entrega"
+    st.session_state["tipo_crit_0"] = "Custo"
+    st.session_state["tipo_crit_1"] = "Benefício"
+    st.session_state["tipo_crit_2"] = "Custo"
+    st.rerun()
+
+# 1. ESTRUTURA DO PROBLEMA & ESCALA
+with st.sidebar.expander("Estrutura & Escala do Problema", expanded=True):
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        n_dms = st.number_input(
+            "Nº Decisores",
+            min_value=1,
+            max_value=20,
+            value=2,
+            step=1,
+            key="cfg_n_dms",
+        )
+        n_crit = st.number_input(
+            "Nº Critérios",
+            min_value=2,
+            max_value=10,
+            value=3,
+            key="cfg_n_crit",
+        )
+    with col_d2:
+        n_alt = st.number_input(
+            "Nº Alternativas",
+            min_value=2,
+            max_value=20,
+            value=3,
+            key="cfg_n_alt",
+        )
+
+    st.markdown("---")
+    tipo_escala = st.selectbox(
+        "Escala dos Dados Brutais:",
+        [
+            "[0, 1] - Normalizada",
+            "[0, 10] - Notas de 0 a 10",
+            "[0, 100] - Porcentagem/Pontos",
+        ],
+        index=0,
+        key="cfg_tipo_escala",
+    )
+
+    if "[0, 10]" in tipo_escala:
+        val_max = 10.0
+    elif "[0, 100]" in tipo_escala:
+        val_max = 100.0
+    else:
+        val_max = 1.0
+
+# 2. CONTROLE DA SIMULAÇÃO DE MONTE CARLO & INCERTEZA
+with st.sidebar.expander("Motor de Monte Carlo & Incerteza", expanded=False):
+    pct_incerteza = (
+        st.slider(
+            "Nível de Incerteza / Variação Perturbativa (%)",
+            min_value=1,
+            max_value=30,
+            value=10,
+            step=1,
+            help="Define a largura do suporte da distribuição triangular ao redor das notas.",
+        )
+        / 100.0
+    )
+
+    n_simulacoes = st.select_slider(
+        "Número de Simulações de Monte Carlo",
+        options=[1000, 2500, 5000, 10000, 20000],
+        value=5000,
+    )
+
+# 3. NOMES DE REFERÊNCIA & CUSTO VS BENEFÍCIO
+with st.sidebar.expander("Rotulagem e Tipos de Critério", expanded=False):
+    st.markdown("**Alternativas**")
+    nomes_alt_globais = [
+        st.text_input(
+            f"Alt {a+1}",
+            value=st.session_state.get(f"glob_alt_{a}", f"Alternativa {a+1}"),
+            key=f"glob_alt_{a}",
+        )
+        for a in range(n_alt)
+    ]
+
+    st.markdown("---")
+    st.markdown("**Critérios & Direção**")
+    nomes_crit_globais = []
+    tipos_crit_globais = []
+
+    for c in range(n_crit):
+        col_c1, col_c2 = st.columns([2, 1])
+        with col_c1:
+            nome_c = st.text_input(
+                f"Crit {c+1}",
+                value=st.session_state.get(
+                    f"glob_crit_{c}", f"Critério {c+1}"
+                ),
+                key=f"glob_crit_{c}",
+            )
+            nomes_crit_globais.append(nome_c)
+        with col_c2:
+            tipo_c = st.selectbox(
+                "Tipo",
+                ["Benefício", "Custo"],
+                index=0
+                if st.session_state.get(f"tipo_crit_{c}", "Benefício")
+                == "Benefício"
+                else 1,
+                key=f"tipo_crit_{c}",
+                help="Benefício: Maior é melhor | Custo: Menor é melhor",
+            )
+            tipos_crit_globais.append(tipo_c)
+
+# 4. IDENTIDADE CORPORATIVA
+with st.sidebar.expander("Identidade Corporativa (PDF)", expanded=False):
+    logo_file = st.file_uploader(
+        "Logomarca do Cliente", type=["png", "jpg", "jpeg"], key="logo"
+    )
+    st.text_input(
+        "Empresa / Organização",
+        placeholder="Ex: RISE / UFAL",
+        key="emp_nome",
+    )
+    st.text_input(
+        "CNPJ",
+        placeholder="Apenas números ou formatado",
+        key="emp_cnpj_input",
+        on_change=callback_atualizar_cnpj,
+    )
+    st.text_input(
+        "Contato / E-mail", placeholder="contato@empresa.com", key="emp_contato"
+    )
+    st.text_input(
+        "Website / Rede Social",
+        placeholder="instagram.com/rise.ufal",
+        key="emp_link",
+    )
+    st.text_input(
+        "CEP",
+        placeholder="00000-000",
+        key="input_cep",
+        on_change=callback_atualizar_cep,
+    )
+    st.text_area("Endereço", key="emp_end", height=70)
+
+
+# LOGO NO TOPO
+col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
+with col_l2:
+    try:
+        url_logo_github = "https://raw.githubusercontent.com/Rogerleite1305/CPP-ROC-CHOISE/main/LOGO%20CPP-ROC-CHOICE.png"
+        st.image(url_logo_github, width=220)
+    except Exception:
+        pass
+
+# CABEÇALHO PRINCIPAL
+st.markdown(
+    """
+    <div class="main-header">
+        <h1>Decision Support System — CPP-ROC-CHOICE</h1>
+        <p>Sistema de Apoio à Decisão Multicritério com Múltiplos Decisores Sob Incerteza Para a Problemática de Escolha</p>
+    </div>
+""",
+    unsafe_allow_html=True,
+)
+
+tab_app, tab_sens, tab_manual = st.tabs(
+    ["Painel de Avaliação", "Análise de Sensibilidade", "Manual do Método"]
+)
 
 with tab_manual:
     st.markdown(
         """
     ### **MANUAL DO USUÁRIO — MÉTODO CPP-ROC CHOICE**
 
-    O **CPP-ROC CHOICE** é um Sistema de Apoio à Decisão Multicritério (DSS) estocástico e ordino-cardinal. Ele foi desenvolvido para auxiliar equipes na escolha de alternativas sob condições de incerteza, integrando a avaliação probabilística de preferências (**CPP**) com a ponderação ordinal de critérios (**ROC**).
+    O **CPP-ROC CHOICE** combina a **Probabilidade de Composição Probabilística (CPP)** com a ponderação por **Rank Order Centroid (ROC)**.
 
     ---
 
-    #### **1. Fundamentação Teórica dos Métodos**
-
-    **A. Método ROC (Rank Order Centroid)**  
-    O **ROC** elimina a subjetividade na atribuição de pesos numéricos diretos aos critérios. Os decisores precisam apenas ordenar os critérios por prioridade ($1º, 2º, \dots, n$). O sistema converte automaticamente essa ordem em pesos matemáticos via fórmula:
-
-    $$w_k = \\frac{1}{n} \\sum_{j=k}^{n} \\frac{1}{j}$$
-
-    * **$n$**: Número total de critérios.
-    * **$k$**: Posição do critério no ranking de prioridade (onde $k=1$ é o mais importante).
+    #### **1. Trata-se do Tratamento de Critérios de Custo**
+    * **Benefício:** Quanto maior o valor, melhor a alternativa.
+    * **Custo:** Quanto menor o valor, melhor a alternativa. O motor realiza a conversão automática através de complementaridade normalizada ($1 - x_{norm}$).
 
     ---
 
-    **B. Método CPP (Probabilistic Composition of Preferences)**  
-    Em vez de tratar as avaliações dos decisores como números fixos, o **CPP** assume que cada nota é o centro de uma distribuição de probabilidade. Para modelar a imprecisão humana, o sistema executa **Simulações de Monte Carlo** (5.000 iterações por célula) utilizando a **Distribuição Triangular**:
-
-    * **Moda ($c$):** A nota atribuída pelo decisor.
-    * **Limite Inferior ($a$):** $0.9 \\times c$ (variação de $-10\%$).
-    * **Limite Superior ($b$):** $1.1 \\times c$ (variação de $+10\%$).
-
-    A partir das simulações, o sistema calcula duas probabilidades estocásticas agregadas para cada alternativa $i$:
-
-    * **$M_i$ (Probabilidade de Excelência / Maximotimizador):** Chance da alternativa apresentar o melhor desempenho global no cenário analisado.
-    * **$m_i$ (Probabilidade de Pior Desempenho / Conservador):** Chance da alternativa apresentar o pior desempenho global no cenário analisado.
-
-    ---
-
-    #### **2. Passo a Passo de Operação no Software**
-
-    | Etapa | Ação do Usuário | O que o Sistema Faz |
-    | :--- | :--- | :--- |
-    | **1. Configuração** | Define na barra lateral o nº de DMs, Alternativas, Critérios, Escala e Dados Cadastrais. | Instancia as matrizes de entrada e campos personalizados. |
-    | **2. Avaliação** | Cada Decisor (DM) preenche sua matriz de notas e estabelece o ranking de prioridade dos critérios. | Armazena as preferências ordinais e cardinais separadamente. |
-    | **3. Processamento** | Clica no botão **"EXECUTAR ANÁLISE DE DECISÃO"**. | Calcula pesos ROC, roda Monte Carlo (CPP) e agrega os resultados globais. |
-    | **4. Análise** | Inspeciona os indicadores $M_i$/$m_i$, a tabela *drill-down* e faz o download do PDF. | Renderiza relatórios executivos no padrão A4 com memória de cálculo. |
-
-    ---
-
-    #### **3. Guia de Interpretação dos Resultados**
-
-    * **Perfil Maximotimizador ($\text{argmax } M_i$):** Indicado para cenários de inovação ou concorrência, onde o objetivo é escolher a alternativa com maior potencial de liderança.
-    * **Perfil Conservador ($\text{argmin } m_i$):** Indicado para gerenciamento de risco e governança pública, escolhendo a opção com menor probabilidade de falha crítica.
-    * **Margem de Dominância:** Mede a diferença entre o 1º e o 2º lugar no indicador $M_i$. Valores acima de **$5.00\%$** indicam alta estabilidade e clareza na escolha.
+    #### **2. Simulação de Monte Carlo & Distribuição Triangular**
+    * Cada nota informada pelos decisores torna-se a moda de uma distribuição triangular estocástica. O suporte da distribuição varia de acordo com o **Perfil Estratégico** e o **Nível de Incerteza** ajustado.
     """
     )
 
 with tab_app:
     matrizes_dms = []
     ordens_dms = []
+    perfis_dms = []
+    nomes_dms_finais = []
 
-    # SINALIZAÇÃO DE ETAPAS
-    st.info("📌 **Fluxo de Avaliação em 3 Etapas:** Complete os passos abaixo para cada decisor antes de executar a análise.")
+    st.markdown("### **Painel de Entrada de Dados dos Decisores**")
 
-    col_e1, col_e2, col_e3 = st.columns(3)
-    col_e1.markdown("1️⃣ **Matriz de Notas** (Alternativas vs Critérios)")
-    col_e2.markdown("2️⃣ **Pesos ROC** (Ranking de Critérios)")
-    col_e3.markdown("3️⃣ **Perfil do Decisor** (Identificação)")
+    # UPLOAD / DOWNLOAD DE ARQUIVO
+    col_up1, col_up2 = st.columns([2, 1])
+    with col_up1:
+        arquivo_carregado = st.file_uploader(
+            "Carregar Matriz Completa via Arquivo (CSV ou Excel):",
+            type=["csv", "xlsx"],
+            key="file_import_global",
+        )
+    with col_up2:
+        st.markdown("<br/>", unsafe_allow_html=True)
+        if arquivo_carregado is not None:
+            try:
+                if arquivo_carregado.name.endswith(".csv"):
+                    df_imp = pd.read_csv(arquivo_carregado, index_col=0)
+                else:
+                    df_imp = pd.read_excel(arquivo_carregado, index_col=0)
+                st.success("Dados importados com sucesso!")
+            except Exception as e:
+                st.error(f"Erro ao ler arquivo: {e}")
+                df_imp = None
+        else:
+            df_imp = None
 
-    st.markdown("---")
-    st.markdown("### **Painel de Avaliação dos Decisores**")
-    abas_dms = st.tabs([f"👤 {nome_dm}" for nome_dm in nomes_dms_globais])
+    # CRIAÇÃO DAS ABAS DINÂMICAS PARA 'N' DECISORES
+    abas_dms = st.tabs([f"Decisor {d+1}" for d in range(n_dms)])
+
+    opcoes_eixo_1 = [
+        "Otimista",
+        "Progressista",
+        "Neutro",
+        "Racional",
+        "Pessimista",
+    ]
+    opcoes_eixo_2 = ["Conservador", "Moderado", "Agressivo"]
 
     for d, aba in enumerate(abas_dms):
         with aba:
-            # SELEÇÃO DE PERFIL DO DECISOR
-            perfil_dm = st.selectbox(
-                f"Selecione o Perfil do {nomes_dms_globais[d]}:",
-                [
-                    "Especialista Técnico",
-                    "Gestor de Risco (Conservador)",
-                    "Tomador de Decisão Estratégico",
-                    "Avaliador Financeiro",
-                    "Stakeholder Operacional"
-                ],
-                key=f"perfil_dm_{d}"
-            )
-            st.caption(f"Perfil selecionado: **{perfil_dm}**")
+            col_id1, col_id2 = st.columns([1, 2])
+            with col_id1:
+                nome_dm = st.text_input(
+                    f"Identificação do Decisor {d+1}:",
+                    value=f"Decisor {d+1}",
+                    key=f"nome_dm_input_{d}",
+                )
+                nomes_dms_finais.append(nome_dm)
+
+            st.markdown(f"#### **Perfil Estratégico do {nome_dm}**")
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                perfil_1 = st.selectbox(
+                    f"Eixo 1 (Tendência) - {nome_dm}:",
+                    opcoes_eixo_1,
+                    index=0 if d % 2 == 0 else 1,
+                    key=f"dm_perfil_e1_{d}",
+                )
+            with col_p2:
+                perfil_2 = st.selectbox(
+                    f"Eixo 2 (Comportamento) - {nome_dm}:",
+                    opcoes_eixo_2,
+                    index=0,
+                    key=f"dm_perfil_e2_{d}",
+                )
+
+            perfis_dms.append((perfil_1, perfil_2))
             st.divider()
 
-            # SINALIZAÇÃO CLARA DAS MATRIZES E PESOS ROC
             col1, col2 = st.columns([2, 1])
             with col1:
-                st.markdown("#### 📋 **Matriz de Avaliação**")
-                st.caption("Linhas = **Alternativas** | Colunas = **Critérios**")
-                st.caption(rotulo_matriz)
-                valores_iniciais = np.round(
-                    np.random.rand(n_alt, n_crit) * val_max, 2
+                st.markdown(f"#### **Matriz de Avaliação de Alternativas**")
+                if df_imp is not None:
+                    df_init = df_imp.copy()
+                else:
+                    valores_iniciais = np.round(
+                        np.random.rand(n_alt, n_crit) * val_max, 2
+                    )
+                    df_init = pd.DataFrame(
+                        valores_iniciais,
+                        columns=nomes_crit_globais,
+                        index=nomes_alt_globais,
+                    )
+
+                df_editada = st.data_editor(
+                    df_init, key=f"matriz_indiv_{d}_v2"
                 )
-                df_init = pd.DataFrame(
-                    valores_iniciais,
-                    columns=nomes_crit_globais,
-                    index=nomes_alt_globais,
-                )
-                df_editada = st.data_editor(df_init, key=f"matriz_indiv_{d}")
                 matrizes_dms.append(df_editada.values)
 
+                # BOTÃO DE DOWNLOAD DOS DADOS DESTA MATRIZ
+                csv_buffer = df_editada.to_csv().encode("utf-8")
+                st.download_button(
+                    label=f"📥 Baixar Matriz do {nome_dm} (CSV)",
+                    data=csv_buffer,
+                    file_name=f"matriz_{nome_dm.lower().replace(' ', '_')}.csv",
+                    mime="text/csv",
+                    key=f"btn_dl_csv_{d}",
+                )
+
             with col2:
-                st.markdown("#### ⚖️ **Pesos ROC (Critérios)**")
-                st.caption("Ordene a importância dos **Critérios** (1º = mais importante):")
+                st.markdown("#### **Ordenação de Preferência (ROC)**")
                 ordem = []
                 criterios_disp = list(nomes_crit_globais)
                 for r in range(n_crit):
@@ -792,23 +1025,30 @@ with tab_app:
                         f"Critério em {r+1}º Lugar",
                         criterios_disp,
                         index=default_idx,
-                        key=f"dm_{d}_rank_{r}",
+                        key=f"dm_{d}_rank_{r}_v2",
                     )
                     ordem.append(nomes_crit_globais.index(escolha))
                 ordens_dms.append(ordem)
 
     st.divider()
 
-    if st.button("EXECUTAR ANÁLISE DE DECISÃO"):
-        with st.spinner("Processando simulação e rastreando cálculos..."):
+    if st.button("🚀 EXECUTAR ANÁLISE DE DECISÃO"):
+        with st.spinner(
+            "Executando simulações estocásticas de Monte Carlo e normalizando critérios..."
+        ):
             res = executar_cpp_roc_choice(
-                matrizes_dms, ordens_dms, val_max=val_max
+                matrizes_dms,
+                ordens_dms,
+                perfis_dms,
+                tipos_crit_globais,
+                val_max=val_max,
+                pct_incerteza=pct_incerteza,
+                n_simulacoes=n_simulacoes,
             )
 
             alt_opt_max_nome = nomes_alt_globais[res["otima_max_Mi"]]
             alt_opt_min_nome = nomes_alt_globais[res["otima_min_mi"]]
 
-            # NOTAÇÃO DAS PROBABILIDADES (Mi e m_i)
             df_res = pd.DataFrame(
                 {
                     "Alternativa": nomes_alt_globais,
@@ -826,7 +1066,8 @@ with tab_app:
                 n_alt,
                 n_crit,
                 nomes_crit_globais,
-                nomes_dms_globais,
+                tipos_crit_globais,
+                nomes_dms_finais,
                 st.session_state.get("emp_nome", ""),
                 st.session_state.get("emp_cnpj", ""),
                 st.session_state.get("emp_contato", ""),
@@ -841,8 +1082,14 @@ with tab_app:
             st.session_state["pdf_bytes"] = pdf_bytes
             st.session_state["alt_opt_max_nome"] = alt_opt_max_nome
             st.session_state["alt_opt_min_nome"] = alt_opt_min_nome
+            st.session_state["nomes_dms_finais"] = nomes_dms_finais
+            st.session_state["matrizes_dms"] = matrizes_dms
+            st.session_state["ordens_dms"] = ordens_dms
+            st.session_state["perfis_dms"] = perfis_dms
+            st.session_state["tipos_crit_globais"] = tipos_crit_globais
             st.session_state["calculo_executado"] = True
 
+    # EXIBIÇÃO DOS RESULTADOS NA PÁGINA INICIAL
     if st.session_state.get("calculo_executado", False):
         res = st.session_state["res"]
         df_res = st.session_state["df_res"]
@@ -850,117 +1097,111 @@ with tab_app:
         alt_opt_max_nome = st.session_state["alt_opt_max_nome"]
         alt_opt_min_nome = st.session_state["alt_opt_min_nome"]
 
-        st.markdown("### **Resultados & Interpretação Decisória**")
+        st.markdown("---")
+        st.markdown("### **Resultado da Análise — Problemática de Escolha**")
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric(
-                label="Recomendação Maximotimizadora",
-                value=str(alt_opt_max_nome),
-            )
-        with c2:
-            st.metric(
-                label="Recomendação de Menor Risco",
-                value=str(alt_opt_min_nome),
-            )
-        with c3:
-            sorted_mi = np.sort(res["M_i"])[::-1]
-            vantagem = (
-                (sorted_mi[0] - sorted_mi[1])
-                if len(sorted_mi) > 1
-                else sorted_mi[0]
-            )
-            st.metric(
-                label="Margem de Dominância", value=f"{vantagem*100:.2f}%"
-            )
-
-        st.dataframe(df_res, use_container_width=True, hide_index=True)
-
-        with st.expander(
-            "🔍 Explorar Origem dos Cálculos (Drill-Down)", expanded=True
-        ):
+        col_r1, col_r2 = st.columns([1.8, 1])
+        with col_r1:
             st.markdown(
-                "#### **Pesos ROC Gerados por Decisor a partir da Ordenação:**"
-            )
-            data_roc = {"Critério": nomes_crit_globais}
-            for d in range(n_dms):
-                data_roc[f"Peso ({nomes_dms_globais[d]})"] = res[
-                    "detalhes_dms"
-                ][d]["pesos_criterios"]
-            st.dataframe(
-                pd.DataFrame(data_roc),
-                use_container_width=True,
-                hide_index=True,
+                f"""
+                <div class="recommendation-card">
+                    <h4 style="margin: 0; color: #15803d;">🏆 Alternativa Recomendada (Máxima Excelência): <b>{alt_opt_max_nome}</b></h4>
+                    <p style="margin: 5px 0 0 0; font-size: 13px; color: #166534;">
+                        Alternativa com menor risco (argmin m_i): <b>{alt_opt_min_nome}</b>
+                    </p>
+                </div>
+            """,
+                unsafe_allow_html=True,
             )
 
-            st.markdown(
-                "#### **Desagregação de Contribuição por Decisor no Resultado Final:**"
-            )
-            dm_contrib_data = {"Alternativa": nomes_alt_globais}
-            for d in range(n_dms):
-                dm_contrib_data[f"Suporte {nomes_dms_globais[d]} (Mi)"] = res[
-                    "detalhes_dms"
-                ][d]["M_contribuicao"]
             st.dataframe(
-                pd.DataFrame(dm_contrib_data),
+                df_res.style.highlight_max(
+                    axis=0,
+                    subset=["Mi (Probabilidade de Excelência)"],
+                    color="#bbf7d0",
+                ).highlight_min(
+                    axis=0,
+                    subset=["m_i (Probabilidade de Pior Desempenho)"],
+                    color="#bfdbfe",
+                ),
                 use_container_width=True,
-                hide_index=True,
             )
 
-        st.divider()
-        st.download_button(
-            label="📄 BAIXAR RELATÓRIO EXECUTIVO E MEMÓRIA DE CÁLCULO (PDF A4)",
-            data=pdf_bytes,
-            file_name="Relatorio_CPP_ROC_CHOICE.pdf",
-            mime="application/pdf",
+        with col_r2:
+            st.markdown("#### **Visualização Gráfica**")
+            buf_img_tela = gerar_grafico_membro(df_res, para_impressao=False)
+            st.image(
+                buf_img_tela,
+                use_column_width=True,
+                caption="Probabilidades Agregadas Mi e mi",
+            )
+
+            st.markdown("#### **Download do Relatório**")
+            st.download_button(
+                label="📄 Baixar Relatório Executivo PDF (Oficial)",
+                data=pdf_bytes,
+                file_name="Relatorio_Executivo_CPP_ROC_CHOICE.pdf",
+                mime="application/pdf",
+                key="btn_download_pdf_main",
+            )
+
+# TAB DE ANÁLISE DE SENSIBILIDADE
+with tab_sens:
+    st.markdown("### **Módulo de Análise de Sensibilidade Estocástica**")
+
+    if not st.session_state.get("calculo_executado", False):
+        st.info("Execute primeiro a análise de decisão no painel principal.")
+    else:
+        st.write(
+            "Avalie como o ranking varia ao alterar a volatilidade ou a quantidade de simulações Monte Carlo."
         )
 
-# ==========================================
-# RODAPÉ ÚNICO: CARTÃO EMPRESA + DIREITOS AUTORAIS RISE-UFAL
-# ==========================================
-logo_b64 = imagem_para_base64(logo_file) if logo_file else None
-emp_nome = st.session_state.get("emp_nome", "")
-emp_cnpj = st.session_state.get("emp_cnpj", "")
-emp_contato = st.session_state.get("emp_contato", "")
-emp_cep = st.session_state.get("cep_formatado", "")
-emp_end = st.session_state.get("emp_end", "")
-emp_link = st.session_state.get("emp_link", "")
+        col_s1, col_s2 = st.columns(2)
+        with col_s1:
+            test_incerteza = (
+                st.slider(
+                    "Testar Nível de Incerteza Perturbativa (%)",
+                    min_value=1,
+                    max_value=40,
+                    value=15,
+                )
+                / 100.0
+            )
+        with col_s2:
+            test_sims = st.selectbox(
+                "Testar Quantidade de Monte Carlo", [1000, 5000, 10000]
+            )
 
-link_html = ""
-if emp_link:
-    url_formatada = (
-        emp_link if emp_link.startswith("http") else f"https://{emp_link}"
-    )
-    link_html = f'<a href="{url_formatada}" target="_blank" class="company-link-btn">Página Oficial / Rede Social</a>'
+        if st.button("Simular Sensibilidade"):
+            res_sens = executar_cpp_roc_choice(
+                st.session_state["matrizes_dms"],
+                st.session_state["ordens_dms"],
+                st.session_state["perfis_dms"],
+                st.session_state["tipos_crit_globais"],
+                val_max=val_max,
+                pct_incerteza=test_incerteza,
+                n_simulacoes=test_sims,
+            )
 
-logo_html = f'<img src="{logo_b64}" class="company-logo-img"/>' if logo_b64 else ""
+            df_sens = pd.DataFrame(
+                {
+                    "Alternativa": nomes_alt_globais,
+                    "Mi Original": df_res["Mi (Probabilidade de Excelência)"],
+                    "Mi Teste Sensibilidade": res_sens["M_i"],
+                    "Variação Absoluta": res_sens["M_i"]
+                    - df_res["Mi (Probabilidade de Excelência)"],
+                }
+            )
 
-card_empresa_footer_html = (
-    f'<div class="company-card">'
-    f"{logo_html}"
-    f'<div class="company-info-container">'
-    f'<div class="company-header-title">'
-    f'<strong style="color: #0f172a; font-size: 15px;">{emp_nome if emp_nome else "Empresa Registrada"}</strong>'
-    f"{link_html}"
-    f"</div>"
-    f'<p class="company-details-text">'
-    f'<b>CNPJ:</b> {emp_cnpj if emp_cnpj else "Não informado"} &nbsp;|&nbsp; '
-    f'<b>Contato:</b> {emp_contato if emp_contato else "Não informado"}<br/>'
-    f'<b>CEP:</b> {emp_cep if emp_cep else "Não informado"} &nbsp;|&nbsp; '
-    f'<b>Endereço:</b> {emp_end if emp_end else "Não informado"}'
-    f"</p>"
-    f"</div>"
-    f"</div>"
-)
-
-st.markdown(card_empresa_footer_html, unsafe_allow_html=True)
-
-st.markdown(
-    """
-    <div class="copyright-footer">
-        © Desenvolvido pelo Grupo RISE / UFAL — Todos os direitos reservados. 
-        <br/><a href="https://instagram.com/rise.ufal" target="_blank">Siga o RISE no Instagram: @rise.ufal</a>
-    </div>
-""",
-    unsafe_allow_html=True,
-)
+            st.dataframe(df_sens, use_container_width=True)
+            if (
+                res_sens["otima_max_Mi"]
+                == st.session_state["res"]["otima_max_Mi"]
+            ):
+                st.success(
+                    "O resultado é **ROBUSTO**: A mesma alternativa permaneceu em 1º lugar!"
+                )
+            else:
+                st.warning(
+                    "O resultado é **SENSÍVEL**: Houve alteração no topo do ranking!"
+                )
