@@ -62,7 +62,7 @@ class NumberedCanvas(canvas.Canvas):
         self.drawString(
             36,
             20,
-            "DSS CPP-ROC CHOICE — Documento Confidencial de Apoio à Decisão",
+            "DSS CPP-ROC CHOICE — Desenvolvido por RISE/UFAL © Todos os direitos reservados",
         )
 
         # Linha divisória do rodapé
@@ -193,19 +193,14 @@ def obter_fatores_perfil(
 
 
 def normalizar_matriz_avaliacao(matriz, tipos_criterios, val_max=1.0):
-    """
-    Normaliza a matriz para o intervalo [0, 1] e inverte critérios do tipo 'Custo'.
-    """
     matriz_norm = np.array(matriz, dtype=float) / float(val_max)
     n_alt, n_crit = matriz_norm.shape
 
     for c in range(n_crit):
         tipo = tipos_criterios[c]
         if tipo == "Custo":
-            # Inversão para Critérios de Custo (Menor é melhor -> vira Maior é melhor)
             matriz_norm[:, c] = 1.0 - matriz_norm[:, c]
 
-    # Garante limites estritos [0, 1]
     matriz_norm = np.clip(matriz_norm, 0.0, 1.0)
     return matriz_norm
 
@@ -504,7 +499,7 @@ def gerar_pdf_relatorio(
     elements.append(t_rec)
     elements.append(Spacer(1, 6))
 
-    # 2. ANÁLISE GRÁFICA & PROTEÇÃO DE QUEBRA DE PÁGINA (KEEPTOGETHER)
+    # 2. ANÁLISE GRÁFICA
     buf_grafico = gerar_grafico_membro(df_resultados, para_impressao=True)
     img_grafico = RLImage(buf_grafico, width=460, height=160)
 
@@ -536,11 +531,10 @@ def gerar_pdf_relatorio(
         )
     )
 
-    # Agrupa a análise gráfica em um bloco para não quebrar a página ao meio
     elements.append(KeepTogether([t_quadro]))
     elements.append(Spacer(1, 8))
 
-    # 3. RASTREABILIDADE: ROC E CRITÉRIOS (COM CUSTO/BENEFÍCIO)
+    # 3. RASTREABILIDADE: ROC E CRITÉRIOS
     elements.append(
         Paragraph(
             "Rastreabilidade: Pesos ROC, Perfis e Tipos de Critérios",
@@ -602,7 +596,7 @@ def gerar_pdf_relatorio(
         )
     )
 
-    # EMBEDDING DE IDENTIDADE CORPORATIVA NO RODAPÉ
+    # EMBEDDING DE IDENTIDADE CORPORATIVA E DIREITOS AUTORAIS NO RODAPÉ DO PDF
     logo_cell = ""
     if logo_file:
         try:
@@ -615,19 +609,16 @@ def gerar_pdf_relatorio(
         except Exception:
             logo_cell = ""
 
-    info_text = (
-        f"<b>{empresa_nome if empresa_nome else 'Organização Registrada'}</b>"
-    )
+    url_rise = "https://www.instagram.com/rise.ufal/"
+    
+    info_text = f"<b>Organização Solicitante:</b> {empresa_nome if empresa_nome else 'Não informada'}"
     if empresa_link:
-        url_val = (
-            empresa_link
-            if empresa_link.startswith("http")
-            else f"https://{empresa_link}"
-        )
-        info_text += f" | <a href='{url_val}' color='#2563eb'><u>Portal Oficial</u></a>"
+        url_val = empresa_link if empresa_link.startswith("http") else f"https://{empresa_link}"
+        info_text += f" | <a href='{url_val}' color='#2563eb'><u>Site Oficial</u></a>"
 
-    info_text += f"<br/><b>CNPJ:</b> {empresa_cnpj if empresa_cnpj else 'Não informado'} | <b>Contato:</b> {empresa_contato if empresa_contato else 'Não informado'}<br/>"
-    info_text += f"<b>CEP:</b> {empresa_cep if empresa_cep else 'Não informado'} | <b>Endereço:</b> {empresa_end if empresa_end else 'Não informado'}"
+    info_text += f"<br/><b>CNPJ:</b> {empresa_cnpj if empresa_cnpj else 'N/A'} | <b>Contato:</b> {empresa_contato if empresa_contato else 'N/A'}"
+    info_text += f" | <b>CEP:</b> {empresa_cep if empresa_cep else 'N/A'}<br/>"
+    info_text += f"<b>Desenvolvimento & Direitos Autorais:</b> RISE — Laboratório de Pesquisa (UFAL) | <a href='{url_rise}' color='#2563eb'><u>@rise.ufal</u></a>"
 
     text_p = Paragraph(info_text, footer_style)
 
@@ -651,7 +642,6 @@ def gerar_pdf_relatorio(
     )
     elements.append(KeepTogether([t_footer]))
 
-    # Geração final do PDF utilizando o NumberedCanvas
     doc.build(elements, canvasmaker=NumberedCanvas)
     buffer.seek(0)
     return buffer.getvalue()
@@ -682,6 +672,22 @@ st.markdown(
         border-radius: 8px;
         margin-bottom: 20px;
     }
+    .footer-rights {
+        text-align: center;
+        color: #64748b;
+        font-size: 12px;
+        padding: 20px 0 10px 0;
+        border-top: 1px solid #e2e8f0;
+        margin-top: 40px;
+    }
+    .footer-rights a {
+        color: #2563eb;
+        text-decoration: none;
+        font-weight: 600;
+    }
+    .footer-rights a:hover {
+        text-decoration: underline;
+    }
     </style>
 """,
     unsafe_allow_html=True,
@@ -696,10 +702,7 @@ if "emp_cnpj" not in st.session_state:
 if "calculo_executado" not in st.session_state:
     st.session_state["calculo_executado"] = False
 
-# ==========================================
-# BARRA LATERAL (SIDEBAR)
-# ==========================================
-
+# BARRA LATERAL
 st.sidebar.markdown(
     """
     <div style="padding-bottom: 10px;">
@@ -710,7 +713,6 @@ st.sidebar.markdown(
     unsafe_allow_html=True,
 )
 
-# BOTAO PARA CARREGAR DADOS DE EXEMPLO
 if st.sidebar.button("💡 Carregar Exemplo Prático"):
     st.session_state["cfg_n_dms"] = 2
     st.session_state["cfg_n_crit"] = 3
@@ -726,7 +728,6 @@ if st.sidebar.button("💡 Carregar Exemplo Prático"):
     st.session_state["tipo_crit_2"] = "Custo"
     st.rerun()
 
-# 1. ESTRUTURA DO PROBLEMA & ESCALA
 with st.sidebar.expander("Estrutura & Escala do Problema", expanded=True):
     col_d1, col_d2 = st.columns(2)
     with col_d1:
@@ -773,7 +774,6 @@ with st.sidebar.expander("Estrutura & Escala do Problema", expanded=True):
     else:
         val_max = 1.0
 
-# 2. CONTROLE DA SIMULAÇÃO DE MONTE CARLO & INCERTEZA
 with st.sidebar.expander("Motor de Monte Carlo & Incerteza", expanded=False):
     pct_incerteza = (
         st.slider(
@@ -793,7 +793,6 @@ with st.sidebar.expander("Motor de Monte Carlo & Incerteza", expanded=False):
         value=5000,
     )
 
-# 3. NOMES DE REFERÊNCIA & CUSTO VS BENEFÍCIO
 with st.sidebar.expander("Rotulagem e Tipos de Critério", expanded=False):
     st.markdown("**Alternativas**")
     nomes_alt_globais = [
@@ -834,7 +833,6 @@ with st.sidebar.expander("Rotulagem e Tipos de Critério", expanded=False):
             )
             tipos_crit_globais.append(tipo_c)
 
-# 4. IDENTIDADE CORPORATIVA
 with st.sidebar.expander("Identidade Corporativa (PDF)", expanded=False):
     logo_file = st.file_uploader(
         "Logomarca do Cliente", type=["png", "jpg", "jpeg"], key="logo"
@@ -855,7 +853,7 @@ with st.sidebar.expander("Identidade Corporativa (PDF)", expanded=False):
     )
     st.text_input(
         "Website / Rede Social",
-        placeholder="instagram.com/rise.ufal",
+        value="https://www.instagram.com/rise.ufal/",
         key="emp_link",
     )
     st.text_input(
@@ -865,7 +863,6 @@ with st.sidebar.expander("Identidade Corporativa (PDF)", expanded=False):
         on_change=callback_atualizar_cep,
     )
     st.text_area("Endereço", key="emp_end", height=70)
-
 
 # LOGO NO TOPO
 col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
@@ -919,7 +916,6 @@ with tab_app:
 
     st.markdown("### **Painel de Entrada de Dados dos Decisores**")
 
-    # UPLOAD / DOWNLOAD DE ARQUIVO
     col_up1, col_up2 = st.columns([2, 1])
     with col_up1:
         arquivo_carregado = st.file_uploader(
@@ -942,7 +938,6 @@ with tab_app:
         else:
             df_imp = None
 
-    # CRIAÇÃO DAS ABAS DINÂMICAS PARA 'N' DECISORES
     abas_dms = st.tabs([f"Decisor {d+1}" for d in range(n_dms)])
 
     opcoes_eixo_1 = [
@@ -1005,7 +1000,6 @@ with tab_app:
                 )
                 matrizes_dms.append(df_editada.values)
 
-                # BOTÃO DE DOWNLOAD DOS DADOS DESTA MATRIZ
                 csv_buffer = df_editada.to_csv().encode("utf-8")
                 st.download_button(
                     label=f"📥 Baixar Matriz do {nome_dm} (CSV)",
@@ -1073,7 +1067,7 @@ with tab_app:
                 st.session_state.get("emp_contato", ""),
                 st.session_state.get("cep_formatado", ""),
                 st.session_state.get("emp_end", ""),
-                st.session_state.get("emp_link", ""),
+                st.session_state.get("emp_link", "https://www.instagram.com/rise.ufal/"),
                 logo_file,
             )
 
@@ -1130,9 +1124,10 @@ with tab_app:
         with col_r2:
             st.markdown("#### **Visualização Gráfica**")
             buf_img_tela = gerar_grafico_membro(df_res, para_impressao=False)
+
             st.image(
                 buf_img_tela,
-                use_column_width=True,
+                use_container_width=True,
                 caption="Probabilidades Agregadas Mi e mi",
             )
 
@@ -1205,3 +1200,17 @@ with tab_sens:
                 st.warning(
                     "O resultado é **SENSÍVEL**: Houve alteração no topo do ranking!"
                 )
+
+# ==========================================
+# 5. RODAPÉ DE DIREITOS AUTORAIS E CRÉDITOS
+# ==========================================
+st.markdown(
+    """
+    <div class="footer-rights">
+        DSS CPP-ROC CHOICE © Todos os direitos reservados.<br/>
+        Desenvolvido pelo grupo de pesquisa <b>RISE</b> — Universidade Federal de Alagoas (UFAL).<br/>
+        Siga no Instagram: <a href="https://www.instagram.com/rise.ufal/" target="_blank">@rise.ufal</a>
+    </div>
+""",
+    unsafe_allow_html=True,
+)
